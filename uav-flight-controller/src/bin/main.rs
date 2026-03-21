@@ -7,26 +7,30 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use blocking_network_stack::{Socket, Stack};
-use embedded_io::{Read, Write};
+use embassy_executor::Spawner;
+use embassy_net::tcp::TcpSocket;
+use embassy_net::{DhcpConfig, StackResources};
+use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
+use esp_hal::clock::CpuClock;
 use esp_hal::peripherals::Peripherals;
 use esp_hal::rng::Rng;
-use esp_hal::time::{Duration, Instant};
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{clock::CpuClock, main};
-use esp_radio::wifi::{ClientConfig, ModeConfig, ScanConfig, WifiController, WifiDevice};
-use log::{info, warn};
-use smoltcp::iface::{SocketSet, SocketStorage};
-use smoltcp::wire::{DhcpOption, IpAddress};
-use uav_flight_controller::delay;
+use esp_radio::wifi::{
+    ClientConfig, ModeConfig, WifiController, WifiDevice, WifiEvent, WifiStaState,
+};
+use log::*;
+use static_cell::StaticCell;
+use uav_flight_controller::mqtt_client::MiniMqtt;
 
 extern crate alloc;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-const WIFI_SSID: &'static str = "Byt3Mage 5G";
-const WIFI_PSWD: &'static str = "0zym@ndia$";
+const WIFI_SSID: &'static str = "Byt3Mage";
+const WIFI_PSWD: &'static str = "12345678";
+static RADIO_INIT: StaticCell<esp_radio::Controller> = StaticCell::new();
+static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 
 fn init_hardware() -> Peripherals {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -38,172 +42,145 @@ fn init_hardware() -> Peripherals {
     peripherals
 }
 
-#[allow(
-    clippy::large_stack_frames,
-    reason = "it's not unusual to allocate larger buffers etc. in main"
-)]
-#[main]
-fn main() -> ! {
+#[esp_rtos::main]
+async fn main(spawner: Spawner) {
     esp_println::logger::init_logger_from_env();
 
     let peripherals = init_hardware();
-    let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let rng = Rng::new();
 
+    // init async executor
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
-    let radio = esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller");
-    let (mut wifi_controller, interfaces) =
-        esp_radio::wifi::new(&radio, peripherals.WIFI, Default::default())
+    let radio_init =
+        RADIO_INIT.init(esp_radio::init().expect("Failed to initialize Wi-Fi/BLE controller"));
+
+    let (wifi_controller, interfaces) =
+        esp_radio::wifi::new(radio_init, peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
 
-    let mut device = interfaces.sta;
+    let device = interfaces.sta;
 
-    let mut socket_set_entries: [SocketStorage; 3] = Default::default();
-    let mut socket_set = SocketSet::new(&mut socket_set_entries[..]);
+    let rng = Rng::new();
+    let net_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
 
-    let mut dhcp_socket = smoltcp::socket::dhcpv4::Socket::new();
+    let dhcp_config = DhcpConfig::default();
+    let config = embassy_net::Config::dhcpv4(dhcp_config);
+    let stack_resources = RESOURCES.init(StackResources::<3>::new());
 
-    dhcp_socket.set_outgoing_options(&[DhcpOption {
-        kind: 12,
-        data: b"uav-flight-controller",
-    }]);
+    // Init network stack
+    let (stack, runner) = embassy_net::new(device, config, stack_resources, net_seed);
 
-    socket_set.add(dhcp_socket);
-
-    let now = || Instant::now().duration_since_epoch().as_millis();
-    let mut stack = Stack::new(
-        create_interface(&mut device),
-        device,
-        socket_set,
-        now,
-        rng.random(),
-    );
-
-    configure_wifi(&mut wifi_controller);
-    scan_wifi(&mut wifi_controller);
-    connect_wifi(&mut wifi_controller);
-    obtain_ip(&mut stack);
-
-    let mut rx_buffer = [0u8; 1536];
-    let mut tx_buffer = [0u8; 1536];
-
-    let socket = stack.get_socket(&mut rx_buffer, &mut tx_buffer);
-
-    http_loop(socket);
-}
-
-pub fn create_interface(device: &mut esp_radio::wifi::WifiDevice) -> smoltcp::iface::Interface {
-    // users could create multiple instances but since they only have one WifiDevice
-    // they probably can't do anything bad with that
-    smoltcp::iface::Interface::new(
-        smoltcp::iface::Config::new(smoltcp::wire::HardwareAddress::Ethernet(
-            smoltcp::wire::EthernetAddress::from_bytes(&device.mac_address()),
-        )),
-        device,
-        timestamp(),
-    )
-}
-
-// some smoltcp boilerplate
-fn timestamp() -> smoltcp::time::Instant {
-    smoltcp::time::Instant::from_micros(
-        esp_hal::time::Instant::now()
-            .duration_since_epoch()
-            .as_micros() as i64,
-    )
-}
-
-fn configure_wifi(controller: &mut WifiController<'_>) {
-    controller
-        .set_power_saving(esp_radio::wifi::PowerSaveMode::None)
-        .unwrap();
-
-    let client_config = ModeConfig::Client(
-        ClientConfig::default()
-            .with_ssid(WIFI_SSID.into())
-            .with_password(WIFI_PSWD.into()),
-    );
-
-    let res = controller.set_config(&client_config);
-    info!("wifi_set_configuration returned {:?}", res);
-
-    controller.start().unwrap();
-    info!("is wifi started: {:?}", controller.is_started());
-}
-
-fn scan_wifi(controller: &mut WifiController<'_>) {
-    info!("Start Wifi Scan");
-    let scan_config = ScanConfig::default().with_max(10);
-    let results = controller.scan_with_config(scan_config).unwrap();
-    results.iter().for_each(|ap| info!("{:?}", ap));
-}
-
-fn connect_wifi(controller: &mut WifiController<'_>) {
-    info!("{:?}", controller.capabilities());
-    info!("wifi_connect {:?}", controller.connect());
-    info!("Wait for connection...");
+    spawner.spawn(net_task(runner)).unwrap();
+    spawner.spawn(wifi_connect(wifi_controller)).unwrap();
 
     loop {
-        match controller.is_connected() {
-            Ok(true) => break,
-            Ok(false) => {}
-            Err(e) => warn!("{:?}", e),
-        }
-    }
-
-    info!("Connected: {:?}", controller.is_connected())
-}
-
-fn obtain_ip(stack: &mut Stack<'_, esp_radio::wifi::WifiDevice<'_>>) {
-    info!("Wait for IP address");
-
-    loop {
-        stack.work();
-        if stack.is_iface_up() {
-            info!("IP acquired: {:?}", stack.get_ip_info());
+        if stack.is_link_up() && stack.config_v4().is_some() {
+            let ip = stack.config_v4().unwrap().address;
+            info!("Got IP: {ip}");
             break;
         }
+
+        Timer::after(Duration::from_millis(500)).await;
+    }
+
+    // Start MQTT
+    info!("Starting MQTT task");
+    spawner.spawn(mqtt_task(stack)).unwrap();
+}
+
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>) {
+    runner.run().await;
+}
+
+#[embassy_executor::task]
+async fn wifi_connect(mut controller: WifiController<'static>) {
+    loop {
+        if WifiStaState::Connected == esp_radio::wifi::sta_state() {
+            controller.wait_for_event(WifiEvent::StaDisconnected).await;
+            log::warn!("WiFi disconnected, reconnecting...");
+            Timer::after(Duration::from_secs(1)).await;
+        }
+
+        if !matches!(controller.is_started(), Ok(true)) {
+            let config = ModeConfig::Client(
+                ClientConfig::default()
+                    .with_ssid(WIFI_SSID.into())
+                    .with_password(WIFI_PSWD.into()),
+            );
+            controller.set_config(&config).unwrap();
+            controller.start_async().await.unwrap();
+        }
+
+        match controller.connect_async().await {
+            Ok(()) => log::info!("WiFi connected"),
+            Err(e) => {
+                log::error!("WiFi connect failed: {:?}", e);
+                Timer::after(Duration::from_secs(3)).await;
+            }
+        }
     }
 }
 
-fn http_loop(mut socket: Socket<'_, '_, WifiDevice>) -> ! {
-    info!("Starting HTTP client loop");
-
+#[embassy_executor::task]
+async fn mqtt_task(stack: embassy_net::Stack<'static>) {
+    // Wait for network
     loop {
-        info!("Making HTTP request");
-        socket.work();
+        if stack.is_link_up() && stack.config_v4().is_some() {
+            break;
+        }
+        Timer::after_millis(500).await;
+    }
 
-        let remote_addr = IpAddress::v4(172, 217, 18, 115);
-        socket.open(remote_addr, 80).unwrap();
-        socket
-            .write(b"GET / HTTP/1.0\r\nHost: www.mobile-j.de\r\n\r\n")
-            .unwrap();
-        socket.flush().unwrap();
+    let mut rx_buf = [0u8; 4096];
+    let mut tx_buf = [0u8; 4096];
+    let socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
 
-        let deadline = Instant::now() + Duration::from_secs(20);
-        let mut buffer = [0u8; 512];
+    let mut mqtt = MiniMqtt::new(socket);
 
-        while let Ok(len) = socket.read(&mut buffer) {
-            let Ok(text) = core::str::from_utf8(&buffer[..len]) else {
-                panic!("Invalid UTF-8 sequence encountered");
-            };
+    // Connect TCP
+    let ip = stack
+        .dns_query("mqtt.thingsboard.cloud", embassy_net::dns::DnsQueryType::A)
+        .await
+        .unwrap()[0];
+    let endpoint = embassy_net::IpEndpoint::new(ip, 1883);
+    mqtt.socket.connect(endpoint).await.unwrap();
 
-            info!("Received: {}", text);
+    // Connect MQTT with ThingsBoard creds
+    mqtt.connect(
+        "6aaj58yw4sn5cc0pvkwp",
+        Some("jw1uuebkpfpldi5zupeo"),
+        Some("pn7bxmkmrk9e4nhytp5z"),
+        60,
+    )
+    .await
+    .unwrap();
 
-            if Instant::now() > deadline {
-                info!("Timeout reached, exiting");
+    // Publish telemetry
+    mqtt.publish("v1/devices/me/telemetry", b"{\"temperature\": 69}")
+        .await
+        .unwrap();
+
+    // Subscribe to RPC
+    mqtt.subscribe("v1/devices/me/rpc/request/+", 1)
+        .await
+        .unwrap();
+
+    // Read loop
+    let mut topic_buf = [0u8; 256];
+    let mut payload_buf = [0u8; 512];
+    loop {
+        match mqtt.read_message(&mut topic_buf, &mut payload_buf).await {
+            Ok(Some((topic, payload))) => {
+                let msg = core::str::from_utf8(payload).unwrap_or("<bin>");
+                log::info!("[{}]: {}", topic, msg);
+            }
+            Ok(None) => {} // pingresp or other, ignore
+            Err(e) => {
+                log::error!("MQTT error: {:?}", e);
                 break;
             }
         }
-
-        socket.disconnect();
-        let deadline = Instant::now() + Duration::from_secs(5);
-
-        while Instant::now() < deadline {
-            socket.work();
-        }
-
-        delay::ms(1000);
     }
 }

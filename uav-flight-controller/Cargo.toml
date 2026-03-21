@@ -16,13 +16,13 @@ esp-rtos = { version = "0.2.0", features = [
     "esp-radio",
     "esp32s3",
     "log-04",
+    "embassy",
 ] }
 
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3", "log-04"] }
-log = "0.4.29"
+
 
 critical-section = "1.2.0"
-embedded-io = "0.6.1"
 esp-alloc = "0.9.0"
 esp-backtrace = { version = "0.18.1", features = [
     "esp32s3",
@@ -46,13 +46,13 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
     "proto-dhcpv4",
     "proto-dns",
     "proto-ipv4",
-    "proto-ipv6",
     "socket-dns",
     "socket-icmp",
     "socket-raw",
     "socket-tcp",
     "socket-udp",
     "socket-dhcpv4",
+    "dns-max-server-count-4",
 ] }
 
 anyhow = { version = "1.0.102", default-features = false }
@@ -62,7 +62,23 @@ blocking-network-stack = { git = "https://github.com/bjoernQ/blocking-network-st
     "tcp",
 ] }
 
-heapless = { version = "0.9.1" }
+embassy-net = { version = "0.7.1", features = [
+    "log",
+    "dhcpv4",
+    "medium-ethernet",
+    "tcp",
+    "udp",
+    "dns",
+] }
+
+static_cell = "2.1.1"
+
+embassy-sync = { version = "0.7.2", features = ["log"] }
+embassy-executor = "0.9.1"
+embassy-time = "0.5.1"
+log = "0.4.29"
+embedded-io = { version = "0.6.1" }
+embedded-io-async = { version = "0.6.0" }
 
 [profile.dev]
 # Rust debug is too slow.
