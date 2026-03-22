@@ -1,8 +1,7 @@
 #![no_std]
 
 pub mod delay;
-pub mod mqtt_client;
-pub mod mqtt_utils;
+pub mod mqtt;
 
 #[macro_export]
 macro_rules! mk_static {

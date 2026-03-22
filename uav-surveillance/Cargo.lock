@@ -59,16 +59,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
-name = "blocking-network-stack"
-version = "0.1.0"
-source = "git+https://github.com/bjoernQ/blocking-network-stack.git?rev=b3ecefc222d8806edd221f266999ca339c52d34e#b3ecefc222d8806edd221f266999ca339c52d34e"
-dependencies = [
- "embedded-io 0.6.1",
- "heapless 0.8.0",
- "smoltcp",
-]
-
-[[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -292,6 +282,9 @@ name = "embassy-futures"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc2d050bdc5c21e0862a89256ed8029ae6c290a93aecefc73084b3002cdebb01"
+dependencies = [
+ "log",
+]
 
 [[package]]
 name = "embassy-hal-internal"
@@ -982,7 +975,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
 dependencies = [
  "hash32",
- "portable-atomic",
  "stable_deref_trait",
 ]
 
@@ -1528,13 +1520,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
-name = "uav-flight-controller"
+name = "uav-surveillance"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "blocking-network-stack",
  "critical-section",
  "embassy-executor",
+ "embassy-futures",
  "embassy-net",
  "embassy-sync 0.7.2",
  "embassy-time",
