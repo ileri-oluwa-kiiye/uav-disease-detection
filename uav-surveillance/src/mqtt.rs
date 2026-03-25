@@ -1,8 +1,5 @@
-use embassy_net::tcp::ConnectError;
-use embedded_io::ReadExactError;
-
 pub mod client;
-pub mod tasks;
+pub mod session;
 mod utils;
 
 mod packet_type {
@@ -57,27 +54,18 @@ const PROTOCOL_NAME: &[u8] = &[0x00, 0x04, b'M', b'Q', b'T', b'T'];
 const PROTOCOL_LEVEL_3_1_1: u8 = 0x04;
 const VARIABLE_HEADER_LEN: usize = 10;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum MqttError {
+    #[error("Network error")]
     Network,
+    #[error("Protocol error")]
     Protocol,
+    #[error("Connect rejected: {0}")]
     ConnectRejected(u8),
 }
 
-impl<E> From<ReadExactError<E>> for MqttError {
-    fn from(_: ReadExactError<E>) -> Self {
-        MqttError::Network
-    }
-}
-
-impl From<embassy_net::tcp::Error> for MqttError {
-    fn from(_: embassy_net::tcp::Error) -> Self {
-        MqttError::Network
-    }
-}
-
-impl From<ConnectError> for MqttError {
-    fn from(_: ConnectError) -> Self {
+impl From<std::io::Error> for MqttError {
+    fn from(_: std::io::Error) -> Self {
         MqttError::Network
     }
 }

@@ -1,6 +1,8 @@
-use embedded_io_async::Read;
+use std::{io::Read, net::TcpStream};
 
-use super::{MqttError, PROTOCOL_LEVEL_3_1_1, PROTOCOL_NAME, VARIABLE_HEADER_LEN, flags, packet_type};
+use super::{
+    flags, packet_type, MqttError, PROTOCOL_LEVEL_3_1_1, PROTOCOL_NAME, VARIABLE_HEADER_LEN,
+};
 
 // Encoding helpers
 
@@ -50,13 +52,19 @@ pub fn read_u16(buf: &[u8]) -> usize {
     ((buf[0] as usize) << 8) | buf[1] as usize
 }
 
-pub async fn read_remaining_length<T: Read>(reader: &mut T) -> Result<usize, MqttError> {
+#[inline(always)]
+pub fn write_bytes(buf: &mut [u8], pos: usize, src: &[u8]) -> usize {
+    buf[pos..pos + src.len()].copy_from_slice(src);
+    src.len()
+}
+
+pub fn read_remaining_length(reader: &mut TcpStream) -> Result<usize, MqttError> {
     let mut remaining: usize = 0;
     let mut shift = 0;
     let mut byte = [0u8; 1];
 
     loop {
-        reader.read_exact(&mut byte).await.map_err(|_| MqttError::Network)?;
+        reader.read_exact(&mut byte)?;
         remaining |= ((byte[0] & 0x7F) as usize) << shift;
         shift += 7;
 
@@ -87,7 +95,6 @@ pub fn build_connect<'a>(
         connect_flags |= flags::CONNECT_USERNAME;
         payload_len += 2 + u.len();
     }
-
     if let Some(p) = password {
         connect_flags |= flags::CONNECT_PASSWORD;
         payload_len += 2 + p.len();
@@ -100,12 +107,8 @@ pub fn build_connect<'a>(
     pos += write_u8(buf, pos, packet_type::CONNECT);
     pos += encode_remaining_length(&mut buf[pos..], remaining);
 
-    // Encode protocol name
-    const NAME_LEN: usize = PROTOCOL_NAME.len();
-    buf[pos..pos + NAME_LEN].copy_from_slice(PROTOCOL_NAME);
-    pos += NAME_LEN;
-
-    // Encode protocol level, connect flags, keep alive
+    // Encode protocol (name, level, connect flags, keep alive)
+    pos += write_bytes(buf, pos, PROTOCOL_NAME);
     pos += write_u8(buf, pos, PROTOCOL_LEVEL_3_1_1);
     pos += write_u8(buf, pos, connect_flags);
     pos += write_u16(buf, pos, keep_alive_secs);
@@ -116,7 +119,6 @@ pub fn build_connect<'a>(
     if let Some(u) = username {
         pos += write_utf8_string(buf, pos, u);
     }
-
     if let Some(p) = password {
         pos += write_utf8_string(buf, pos, p);
     }
@@ -124,7 +126,13 @@ pub fn build_connect<'a>(
     &buf[..pos]
 }
 
-pub fn build_publish<'a>(buf: &'a mut [u8], topic: &str, payload: &[u8], qos: u8, retain: bool) -> &'a [u8] {
+pub fn build_publish<'a>(
+    buf: &'a mut [u8],
+    topic: &str,
+    payload: &[u8],
+    qos: u8,
+    retain: bool,
+) -> &'a [u8] {
     let mut flags = 0;
 
     match qos {
@@ -140,11 +148,10 @@ pub fn build_publish<'a>(buf: &'a mut [u8], topic: &str, payload: &[u8], qos: u8
     let remaining = 2 + topic.len() + payload.len();
     let mut pos = 0;
 
-    pos += write_u8(buf, pos, packet_type::PUBLISH | flags);
+    pos += write_u8(buf, pos, packet_type::PUBLISH | flags); // Fixed header
     pos += encode_remaining_length(&mut buf[pos..], remaining);
     pos += write_utf8_string(buf, pos, topic);
-    buf[pos..pos + payload.len()].copy_from_slice(payload);
-    pos += payload.len();
+    pos += write_bytes(buf, pos, payload);
 
     &buf[..pos]
 }
