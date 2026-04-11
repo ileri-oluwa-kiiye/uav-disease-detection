@@ -1,0 +1,40 @@
+[package]
+name = "uav-surveillance"
+version = "0.1.0"
+authors = ["Byt3Mage <alayakiire@gmail.com>"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.82"
+
+[[bin]]
+name = "uav-surveillance"
+harness = false           # do not use the built-in cargo test harness -> resolve rust-analyzer errors
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true    # Symbols are nice, and they don't increase the size on Flash
+opt-level = "z"
+
+[dependencies]
+log = "0.4"
+esp-idf-svc = { version = "0.52.1", features = [
+    "critical-section",
+    "embassy-time-driver",
+    "embassy-sync",
+] }
+
+embassy-time = { version = "0.5", features = ["generic-queue-8"] }
+thiserror = "2.0.18"
+anyhow = "1.0.102"
+simple-ternary = "0.3.0"
+
+[build-dependencies]
+dotenvy = "0.15"
+embuild = "0.33"
+
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/esp32-camera"]
+bindings_header = "bindings.h"
+bindings_module = "camera"
