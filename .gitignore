@@ -1,1 +1,14 @@
-*/target
+# Build output
+target/
+
+# ESP-IDF build artifacts
+.embuild/
+sdkconfig
+sdkconfig.old
+components_esp32s3.lock
+
+# Secrets
+.env*
+
+# Cargo
+Cargo.lock
