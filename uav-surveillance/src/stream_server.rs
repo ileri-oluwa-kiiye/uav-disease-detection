@@ -4,13 +4,7 @@ use esp_idf_svc::io::Write;
 use crate::camera;
 
 const STREAM_CONTENT_TYPE: &str = "multipart/x-mixed-replace; boundary=frame";
-const HTML: &[u8] = br#"<!DOCTYPE html>
-<html>
-<head><title>Tomato UAV Camera</title></head>
-<body style="background:#111;display:flex;justify-content:center;align-items:center;height:100vh;margin:0">
-  <img src="/stream" style="max-width:100%;border:2px solid #444"/>
-</body>
-</html>"#;
+const HTML: &[u8] = include_bytes!("stream.html");
 
 pub fn start() -> anyhow::Result<EspHttpServer<'static>> {
     let config = Configuration {
