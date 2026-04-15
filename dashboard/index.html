@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgroAI Monitor — UAV Tomato Disease</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar" aria-label="Main navigation">
+        <div class="sidebar__brand">
+          <span class="sidebar__logo" aria-hidden="true"></span>
+          <div>
+            <h1 class="sidebar__title">AgroAI Monitor</h1>
+            <p class="sidebar__tagline">UAV crop intelligence</p>
+          </div>
+        </div>
+
+        <nav class="sidebar__nav" aria-label="Sections">
+          <button type="button" class="nav-item nav-item--active" data-nav="dashboard">
+            <i data-lucide="layout-dashboard" class="nav-item__icon" aria-hidden="true"></i>
+            <span>Dashboard</span>
+          </button>
+          <button type="button" class="nav-item" data-nav="map">
+            <i data-lucide="map" class="nav-item__icon" aria-hidden="true"></i>
+            <span>Map View</span>
+          </button>
+          <button type="button" class="nav-item" data-nav="history">
+            <i data-lucide="history" class="nav-item__icon" aria-hidden="true"></i>
+            <span>History</span>
+          </button>
+        </nav>
+
+        <div class="sidebar__footer">
+          <p class="sidebar__hint">API: <code class="mono">127.0.0.1:8000</code></p>
+        </div>
+      </aside>
+
+      <div class="main-wrap">
+        <main class="main">
+          <header class="topbar">
+            <div>
+              <h2 class="topbar__title" id="topbar-title">Mission dashboard</h2>
+              <p class="topbar__subtitle">
+                Upload field imagery, run inference, and review geotagged detections.
+              </p>
+            </div>
+            <div class="topbar__pill" role="status">
+              <span class="pulse" aria-hidden="true"></span>
+              Live uplink
+            </div>
+          </header>
+
+          <!-- Dashboard -->
+          <section id="panel-dashboard" class="panel" aria-labelledby="topbar-title">
+            <div class="grid-2">
+              <article class="card card--upload">
+                <div class="card__head">
+                  <h3 class="card__title">New analysis</h3>
+                  <p class="card__desc">Drop a canopy image and set GPS coordinates.</p>
+                </div>
+
+                <div
+                  id="drop-zone"
+                  class="drop-zone"
+                  role="button"
+                  tabindex="0"
+                  aria-label="Upload image by click or drag and drop"
+                >
+                  <input
+                    id="image-input"
+                    type="file"
+                    accept="image/*"
+                    aria-hidden="true"
+                  />
+                  <!-- class="visually-hidden" -->
+                  <i data-lucide="image-plus" class="drop-zone__icon" aria-hidden="true"></i>
+                  <p class="drop-zone__text"><strong>Drag &amp; drop</strong> or click to browse</p>
+                  <p class="drop-zone__hint">PNG, JPG, WEBP — field or UAV still</p>
+                </div>
+
+                <div class="preview-wrap">
+                  <img id="image-preview" class="preview-img" alt="Selected preview" hidden />
+                </div>
+
+                <form id="predict-form" class="coords-form" novalidate>
+                  <div class="field-row">
+                    <label class="field">
+                      <span class="field__label">Latitude</span>
+                      <input
+                        id="lat-input"
+                        name="latitude"
+                        type="text"
+                        inputmode="decimal"
+                        class="field__input mono"
+                        placeholder="e.g. 6.5244"
+                        autocomplete="off"
+                        required
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field__label">Longitude</span>
+                      <input
+                        id="lng-input"
+                        name="longitude"
+                        type="text"
+                        inputmode="decimal"
+                        class="field__input mono"
+                        placeholder="e.g. 3.3792"
+                        autocomplete="off"
+                        required
+                      />
+                    </label>
+                  </div>
+
+                  <div id="form-error" class="alert" role="alert" hidden></div>
+
+                  <button type="submit" id="submit-btn" class="btn btn--primary">
+                    <span class="btn-spinner" hidden aria-hidden="true"></span>
+                    <span class="btn-label">Run detection</span>
+                  </button>
+                </form>
+              </article>
+
+              <article id="result-card" class="card card--result" hidden>
+                <div class="card__head">
+                  <h3 class="card__title">Latest result</h3>
+                  <p class="card__desc">Model output for the current upload.</p>
+                </div>
+
+                <div class="result-body">
+                  <div class="result-visual">
+                    <img data-field="result-img" class="result-img" alt="" hidden />
+                  </div>
+                  <div class="result-meta">
+                    <p class="result-label">Disease class</p>
+                    <p data-field="class" class="result-class mono">—</p>
+                    <p class="result-label">Confidence</p>
+                    <div class="conf-track">
+                      <div data-field="conf-bar" class="conf-bar"></div>
+                    </div>
+                    <p data-field="conf-text" class="conf-pct mono">0%</p>
+                    <p class="result-label">Coordinates</p>
+                    <p data-field="coords" class="result-coords mono">—</p>
+                    <p class="result-label">Timestamp</p>
+                    <p data-field="time" class="result-time mono">—</p>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <!-- Map -->
+          <section id="panel-map" class="panel panel--map" hidden aria-label="Map view">
+            <article class="card card--map">
+              <div class="card__head card__head--row">
+                <div>
+                  <h3 class="card__title">Geospatial detections</h3>
+                  <p class="card__desc">Markers cluster by region; click for image and scores.</p>
+                </div>
+                <div class="legend">
+                  <span class="legend__dot legend__dot--ok"></span> Healthy
+                  <span class="legend__dot legend__dot--risk"></span> Infected / stress
+                </div>
+              </div>
+              <div id="map-error" class="alert alert--map" role="alert" hidden></div>
+              <div id="map-view-host" class="map-host" role="application" aria-label="Leaflet map"></div>
+            </article>
+          </section>
+
+          <!-- History -->
+          <section id="panel-history" class="panel" hidden aria-label="Prediction history">
+            <article class="card">
+              <div class="card__head card__head--row card__head--wrap">
+                <div>
+                  <h3 class="card__title">Flight history</h3>
+                  <p class="card__desc">Search by class, sort by confidence or time.</p>
+                </div>
+                <div class="history-tools">
+                  <label class="search-field">
+                    <i data-lucide="search" class="search-field__icon" aria-hidden="true"></i>
+                    <input
+                      id="history-filter"
+                      type="search"
+                      class="search-field__input"
+                      placeholder="Filter by disease class…"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <select id="history-sort" class="select" aria-label="Sort predictions">
+                    <option value="date-desc">Newest first</option>
+                    <option value="date-asc">Oldest first</option>
+                    <option value="conf-desc">Confidence high → low</option>
+                    <option value="conf-asc">Confidence low → high</option>
+                  </select>
+                </div>
+              </div>
+              <div id="history-error" class="alert" role="alert" hidden></div>
+              <div class="table-scroll">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Image</th>
+                      <th scope="col">Class</th>
+                      <th scope="col">Confidence</th>
+                      <th scope="col">Latitude</th>
+                      <th scope="col">Longitude</th>
+                      <th scope="col">Timestamp</th>
+                    </tr>
+                  </thead>
+                  <tbody id="history-tbody"></tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
