@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     //    .spawn(mqtt_loop)?;
 
     // Camera thread
-    //thread::Builder::new()
+    // thread::Builder::new()
     //    .stack_size(16 * 1024)
     //    .name("camera".into())
     //    .spawn(camera_loop)?;

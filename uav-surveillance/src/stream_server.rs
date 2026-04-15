@@ -14,13 +14,13 @@ pub fn start() -> anyhow::Result<EspHttpServer<'static>> {
 
     let mut server = EspHttpServer::new(&config)?;
 
-    // Endpoint: http://esp32-ip/
+    // Endpoint: http://{ip}/
     server.fn_handler("/", esp_idf_svc::http::Method::Get, |req| {
         let mut resp = req.into_ok_response()?;
         resp.write_all(HTML).map_err(|e| anyhow::anyhow!(e))
     })?;
 
-    // Endpoint: http://esp32-ip/stream
+    // Endpoint: http://{ip}/stream
     server.fn_handler("/stream", esp_idf_svc::http::Method::Get, |req| {
         let mut resp = req.into_response(
             200,
@@ -51,7 +51,7 @@ pub fn start() -> anyhow::Result<EspHttpServer<'static>> {
                 .and_then(|_| resp.write_all(b"\r\n"));
 
             if write_result.is_err() {
-                // Client disconnected - exit cleanly
+                // Client disconnected, exit cleanly
                 break;
             }
         }
