@@ -6,13 +6,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import FastAPI, File, Form, UploadFile
+from app.inference import predict_image
+from app.model import load_model
+from app.utils import read_imagefile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
-from app.model import load_model
-from app.inference import predict_image
-from app.utils import read_imagefile
+from fastapi import FastAPI, File, Form, UploadFile
 
 app = FastAPI(title="Tomato Disease Classifier")
 
@@ -58,9 +58,7 @@ async def predict(
 ):
     image_bytes = await file.read()
     image = read_imagefile(image_bytes)
-
     result = predict_image(image, model, class_names)
-
     pred_id = str(uuid.uuid4())
     ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     thumb_url = _thumbnail_data_url(image_bytes)
@@ -74,6 +72,7 @@ async def predict(
         "timestamp": ts,
         "image_url": thumb_url,
     }
+
     predictions_history.append(record)
 
     return {
