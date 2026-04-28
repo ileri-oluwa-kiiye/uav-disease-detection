@@ -143,6 +143,112 @@
                 </form>
               </article>
 
+              <article class="card card--controls">
+                <div class="card__head">
+                  <h3 class="card__title">UAV controls</h3>
+                  <p class="card__desc">Send basic flight commands and preview the local control state.</p>
+                </div>
+
+                <div class="control-stack">
+                  <button type="button" id="arm-toggle" class="btn btn--danger" aria-pressed="false">
+                    Disarmed
+                  </button>
+
+                  <label class="field">
+                    <span class="field__label">Base throttle</span>
+                    <div class="range-row">
+                      <input
+                        id="base-throttle"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value="0"
+                        class="range"
+                      />
+                      <output id="base-throttle-value" class="mono">0.00</output>
+                    </div>
+                  </label>
+
+                  <div class="field-group">
+                    <p class="field-group__title">Position</p>
+                    <div class="field-row field-row--triple">
+                      <label class="field">
+                        <span class="field__label">X</span>
+                        <input id="pos-x" type="number" step="0.1" value="0" class="field__input mono" />
+                      </label>
+                      <label class="field">
+                        <span class="field__label">Y</span>
+                        <input id="pos-y" type="number" step="0.1" value="0" class="field__input mono" />
+                      </label>
+                      <label class="field">
+                        <span class="field__label">Z</span>
+                        <input id="pos-z" type="number" step="0.1" value="0" class="field__input mono" />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="field-group">
+                    <p class="field-group__title">Orientation</p>
+                    <div class="field-row field-row--triple">
+                      <label class="field">
+                        <span class="field__label">Roll</span>
+                        <input id="ori-roll" type="number" step="0.1" value="0" class="field__input mono" />
+                      </label>
+                      <label class="field">
+                        <span class="field__label">Pitch</span>
+                        <input id="ori-pitch" type="number" step="0.1" value="0" class="field__input mono" />
+                      </label>
+                      <label class="field">
+                        <span class="field__label">Yaw</span>
+                        <input id="ori-yaw" type="number" step="0.1" value="0" class="field__input mono" />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="manual-pad" aria-label="Manual controls">
+                    <button type="button" class="manual-btn manual-btn--up" data-manual="forward" aria-label="Forward">
+                      ↑
+                    </button>
+                    <button type="button" class="manual-btn manual-btn--left" data-manual="left" aria-label="Left">
+                      ←
+                    </button>
+                    <button type="button" class="manual-btn manual-btn--right" data-manual="right" aria-label="Right">
+                      →
+                    </button>
+                    <button type="button" class="manual-btn manual-btn--down" data-manual="backward" aria-label="Backward">
+                      ↓
+                    </button>
+                  </div>
+                </div>
+              </article>
+
+              <article class="card card--telemetry">
+                <div class="card__head">
+                  <h3 class="card__title">Telemetry</h3>
+                  <p class="card__desc">Live values reflected from the current dashboard controls.</p>
+                </div>
+
+                <div class="telemetry-grid">
+                  <div class="telemetry-item">
+                    <span class="telemetry-item__label">Attitude</span>
+                    <span id="telemetry-attitude" class="telemetry-item__value mono">0.0, 0.0, 0.0</span>
+                  </div>
+                  <div class="telemetry-item">
+                    <span class="telemetry-item__label">Motor duties</span>
+                    <span id="telemetry-motors" class="telemetry-item__value mono">0, 0, 0, 0</span>
+                  </div>
+                  <div class="telemetry-item">
+                    <span class="telemetry-item__label">Armed?</span>
+                    <span id="telemetry-armed" class="telemetry-item__value mono">No</span>
+                  </div>
+                  <div class="telemetry-item">
+                    <span class="telemetry-item__label">Tick</span>
+                    <span id="telemetry-tick" class="telemetry-item__value mono">0</span>
+                  </div>
+                </div>
+              </article>
+
               <article id="result-card" class="card card--result" hidden>
                 <div class="card__head">
                   <h3 class="card__title">Latest result</h3>
@@ -245,6 +351,6 @@
     ></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
-    <script type="module" src="js/main.js"></script>
+    <script src="js/main.js"></script>
   </body>
 </html>
