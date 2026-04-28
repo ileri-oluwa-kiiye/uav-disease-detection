@@ -1,7 +1,6 @@
 use std::ptr::NonNull;
 
 use esp_idf_svc::sys::camera::*;
-use simple_ternary::tnr;
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[error("Failed to initialize camera: {0}")]
@@ -60,41 +59,48 @@ pub fn init() -> Result<(), CameraInitError> {
         grab_mode: camera_grab_mode_t_CAMERA_GRAB_LATEST,
         sccb_i2c_port: -1,
     };
+
     let ret = unsafe { esp_camera_init(&config) };
-    tnr! {ret == ESP_OK => Ok (()) :  Err(CameraInitError(ret))}
+    if ret != ESP_OK {
+        return Err(CameraInitError(ret));
+    }
+    Ok(())
 }
 
-pub struct Frame(NonNull<camera_fb_t>);
+pub struct Frame {
+    fb: *mut camera_fb_t,
+}
 
 impl Frame {
     pub fn data(&self) -> &[u8] {
         unsafe {
-            let fb = self.0.as_ref();
+            let fb = &*self.fb;
             std::slice::from_raw_parts(fb.buf, fb.len)
         }
     }
 
     pub fn width(&self) -> usize {
-        unsafe { self.0.as_ref().width }
+        unsafe { (&*self.fb).width }
     }
 
     pub fn height(&self) -> usize {
-        unsafe { self.0.as_ref().height }
+        unsafe { (&*self.fb).height }
     }
 
     pub fn len(&self) -> usize {
-        unsafe { self.0.as_ref().len }
+        unsafe { (&*self.fb).len }
     }
 }
 
 impl Drop for Frame {
     fn drop(&mut self) {
         unsafe {
-            esp_camera_fb_return(self.0.as_ptr());
+            esp_camera_fb_return(self.fb);
         }
     }
 }
 
 pub fn capture() -> Option<Frame> {
-    NonNull::new(unsafe { esp_camera_fb_get() }).map(Frame)
+    let fb = unsafe { esp_camera_fb_get() };
+    (!fb.is_null()).then_some(Frame { fb })
 }

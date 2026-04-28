@@ -53,16 +53,16 @@ pub fn write(serial: &mut UsbSer, data: &[u8]) -> usize {
 }
 
 // Write all bytes, with bounded retries
-// pub fn write_all(serial: &mut UsbSer, data: &[u8]) {
-//     let mut offset = 0;
-//     let mut attempts = 0;
-//     while offset < data.len() && attempts < 50 {
-//         let n = write(serial, &data[offset..]);
-//         if n > 0 {
-//             offset += n;
-//             attempts = 0;
-//         } else {
-//             attempts += 1;
-//         }
-//     }
-// }
+pub fn write_all(serial: &mut UsbSer, data: &[u8]) {
+    let mut offset = 0;
+    let mut attempts = 0;
+    while offset < data.len() && attempts < 50 {
+        let n = write(serial, &data[offset..]);
+        if n > 0 {
+            offset += n;
+            attempts = 0;
+        } else {
+            attempts += 1;
+        }
+    }
+}

@@ -8,6 +8,8 @@ use core::f32::consts::PI;
 
 use crate::math;
 
+const DEG_TO_RAD: f32 = PI / 180.0;
+
 /// Orientation as a unit quaternion [w, x, y, z]
 #[derive(Debug, Clone, Copy)]
 pub struct Quaternion {
@@ -109,10 +111,9 @@ impl MadgwickFilter {
         let (q0, q1, q2, q3) = (q.w, q.x, q.y, q.z);
 
         // Convert gyro to rad/s
-        let deg2rad = PI / 180.0;
-        let gx = gx * deg2rad;
-        let gy = gy * deg2rad;
-        let gz = gz * deg2rad;
+        let gx = gx * DEG_TO_RAD;
+        let gy = gy * DEG_TO_RAD;
+        let gz = gz * DEG_TO_RAD;
 
         // Rate of change of quaternion from gyroscope
         let q_dot_w = 0.5 * (-q1 * gx - q2 * gy - q3 * gz);

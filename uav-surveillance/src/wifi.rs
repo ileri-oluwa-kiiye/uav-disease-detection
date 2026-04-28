@@ -4,7 +4,7 @@ use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::modem::Modem,
     nvs::EspDefaultNvsPartition,
-    wifi::{BlockingWifi, ClientConfiguration, Configuration, EspWifi},
+    wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
 
 type WiFi = BlockingWifi<EspWifi<'static>>;
@@ -22,11 +22,25 @@ pub fn connect(
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
         ssid: WIFI_SSID.try_into()?,
         password: WIFI_PASS.try_into()?,
+        auth_method: AuthMethod::WPA2Personal,
         ..Default::default()
     }))?;
 
     wifi.start()?;
-    wifi.connect()?;
+
+    loop {
+        match wifi.connect() {
+            Ok(()) => {
+                log::info!("WiFi connected");
+                break;
+            }
+            Err(e) => {
+                log::warn!("Connect failed: {:?}, retrying in 2s...", e);
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+        }
+    }
+
     wifi.wait_netif_up()?;
 
     let ip = wifi.wifi().sta_netif().get_ip_info()?.ip;

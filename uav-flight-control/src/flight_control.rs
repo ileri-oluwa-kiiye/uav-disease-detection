@@ -38,19 +38,12 @@ pub struct Telemetry {
     pub armed: bool,
 }
 
-#[derive(Clone, Copy, Default)]
-pub enum ArmRequest {
-    #[default]
-    None,
-    Arm,
-    Disarm,
-}
 /// Commands from main loop to ISR
 #[derive(Clone, Copy, Default)]
 pub struct Commands {
     pub desired_angles: [f32; 3],
     pub base_throttle: f32,
-    pub arm_request: ArmRequest,
+    pub arm_request: bool,
 }
 
 /// Everything the ISR needs
@@ -74,31 +67,33 @@ pub struct FlightControl {
     pub tick_count: u32,
 }
 
-/// Initialize the flight control loop.
-/// Takes ownership of all flight-critical hardware.
-/// After this call, the TIM2 ISR owns the IMU, motors, and runs the full loop.
-pub fn init(
-    imu: board::Imu,
-    timer: Timer<TIM2>,
-    ch1: board::PwmCh1,
-    ch2: board::PwmCh2,
-    ch3: board::PwmCh3,
-    ch4: board::PwmCh4,
-    max_duty: u16,
-) -> FlightControl {
-    FlightControl {
-        imu,
-        timer,
-        ch1,
-        ch2,
-        ch3,
-        ch4,
-        ahrs: MadgwickFilter::new(1000.0, 0.033),
-        rate_pids: FlightPids::new(default_rate_config(), default_rate_yaw_config()),
-        angle_pids: FlightPids::new(default_angle_config(), default_angle_yaw_config()),
-        motors: Motors::new(max_duty),
-        desired_rates: [0.0; 3],
-        tick_count: 0,
+impl FlightControl {
+    /// Initialize the flight control loop.
+    /// Takes ownership of all flight-critical hardware.
+    /// After this call, the TIM2 ISR owns the IMU, motors, and runs the full loop.
+    pub fn init(
+        imu: board::Imu,
+        timer: Timer<TIM2>,
+        ch1: board::PwmCh1,
+        ch2: board::PwmCh2,
+        ch3: board::PwmCh3,
+        ch4: board::PwmCh4,
+        max_duty: u16,
+    ) -> Self {
+        Self {
+            imu,
+            timer,
+            ch1,
+            ch2,
+            ch3,
+            ch4,
+            ahrs: MadgwickFilter::new(1000.0, 0.033),
+            rate_pids: FlightPids::new(default_rate_config(), default_rate_yaw_config()),
+            angle_pids: FlightPids::new(default_angle_config(), default_angle_yaw_config()),
+            motors: Motors::new(max_duty),
+            desired_rates: [0.0; 3],
+            tick_count: 0,
+        }
     }
 }
 

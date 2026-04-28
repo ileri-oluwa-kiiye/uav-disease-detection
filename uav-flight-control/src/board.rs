@@ -19,3 +19,7 @@ pub type PwmCh1 = pwm::Pwm<pac::TIM3, 0, pwm::ComplementaryImpossible>;
 pub type PwmCh2 = pwm::Pwm<pac::TIM3, 1, pwm::ComplementaryImpossible>;
 pub type PwmCh3 = pwm::Pwm<pac::TIM3, 2, pwm::ComplementaryImpossible>;
 pub type PwmCh4 = pwm::Pwm<pac::TIM3, 3, pwm::ComplementaryImpossible>;
+
+// USART serial channels
+pub type Serial1Tx = stm32h7xx_hal::serial::Tx<pac::USART1>;
+pub type Serial1Rx = stm32h7xx_hal::serial::Rx<pac::USART1>;

@@ -3,19 +3,20 @@
 
 mod board;
 mod drivers;
-mod flight;
+mod flight_control;
 mod math;
-mod writer;
+mod protocol;
 
-use panic_halt as _;
+use defmt_rtt as _;
+use panic_probe as _;
 
 #[rtic::app(device = stm32h7xx_hal::stm32, peripherals = true, dispatchers = [SPI1])]
 mod app {
-    use core::fmt::Write as FmtWrite;
     use stm32h7xx_hal::{
+        nb,
         prelude::*,
         rcc::rec::{Spi123ClkSel, UsbClkSel},
-        spi,
+        serial, spi,
         timer::Event,
     };
 
@@ -26,8 +27,8 @@ mod app {
             motors::{MOTOR_FL, MOTOR_FR, MOTOR_RL, MOTOR_RR},
             usb_serial::{self, UsbDev, UsbSer},
         },
-        flight::{self, ArmRequest, Commands, FlightControl, Telemetry},
-        writer::WriteBuf,
+        flight_control::{Commands, FlightControl, Telemetry},
+        protocol,
     };
 
     #[shared]
@@ -35,6 +36,7 @@ mod app {
         usb_ser: UsbSer,
         commands: Commands,
         telemetry: Telemetry,
+        uart_tx: board::Serial1Tx,
     }
 
     #[local]
@@ -45,6 +47,9 @@ mod app {
         usb_dev: UsbDev,
         // Idle loop
         led: board::Led,
+        // UART serial loop
+        uart_rx: board::Serial1Rx,
+        parser: protocol::Parser,
     }
 
     #[init]
@@ -63,7 +68,7 @@ mod app {
             .freeze(pwrcfg, &dp.SYSCFG);
 
         // Peripheral clocks
-        let _ = ccdr.clocks.hsi48_ck().expect("HSI48 must run");
+        ccdr.clocks.hsi48_ck().expect("HSI48 must run");
         ccdr.peripheral.kernel_usb_clk_mux(UsbClkSel::Hsi48);
         ccdr.peripheral.kernel_spi123_clk_mux(Spi123ClkSel::Per);
 
@@ -114,6 +119,7 @@ mod app {
             ccdr.peripheral.TIM3,
             &ccdr.clocks,
         );
+
         ch1.enable();
         ch2.enable();
         ch3.enable();
@@ -124,21 +130,45 @@ mod app {
         let mut timer = dp.TIM2.timer(1.kHz(), ccdr.peripheral.TIM2, &ccdr.clocks);
         timer.listen(Event::TimeOut);
 
+        // USART1 on PA9/PA10 for ESP32 comms
+        let tx_pin = gpioa.pa9.into_alternate::<7>();
+        let rx_pin = gpioa.pa10.into_alternate::<7>();
+
+        let config = serial::config::Config::default()
+            .baudrate(115200.bps())
+            .parity_none();
+
+        let mut uart = dp
+            .USART1
+            .serial(
+                (tx_pin, rx_pin),
+                config,
+                ccdr.peripheral.USART1,
+                &ccdr.clocks,
+            )
+            .unwrap();
+        uart.listen(serial::Event::Rxne);
+
+        let (uart_tx, uart_rx) = uart.split();
+
         (
             Shared {
                 usb_ser,
                 telemetry: Telemetry::default(),
                 commands: Commands::default(),
+                uart_tx,
             },
             Local {
-                fc: flight::init(imu, timer, ch1, ch2, ch3, ch4, max_duty),
+                fc: FlightControl::init(imu, timer, ch1, ch2, ch3, ch4, max_duty),
                 usb_dev,
                 led,
+                uart_rx,
+                parser: protocol::Parser::new(),
             },
         )
     }
 
-    /// Flight control loop — runs at exactly 1kHz in TIM2 ISR
+    /// Flight control loop, runs at exactly 1kHz in TIM2 ISR
     /// Priority 2 (higher than USB, lower than nothing)
     #[task(binds = TIM2, priority = 2, local = [fc], shared = [telemetry, commands])]
     fn flight_loop(mut ctx: flight_loop::Context) {
@@ -152,14 +182,11 @@ mod app {
 
         // 3. Arm/disarm
         match cmds.arm_request {
-            ArmRequest::None => {} // Do nothing
-            ArmRequest::Arm => fc.motors.arm(),
-            ArmRequest::Disarm => {
-                if fc.motors.is_armed() {
-                    fc.motors.disarm();
-                    fc.rate_pids.reset();
-                    fc.angle_pids.reset();
-                }
+            true => fc.motors.arm(),
+            false => {
+                fc.motors.disarm();
+                fc.rate_pids.reset();
+                fc.angle_pids.reset();
             }
         }
 
@@ -228,6 +255,33 @@ mod app {
         });
     }
 
+    /// UART RX interrupt. Parse incoming bytes from ESP32
+    #[task(binds = USART1, priority = 1, local = [uart_rx, parser], shared = [commands])]
+    fn uart_rx(mut ctx: uart_rx::Context) {
+        if let Ok(byte) = ctx.local.uart_rx.read() {
+            if let Some(msg) = ctx.local.parser.feed(byte) {
+                match msg {
+                    protocol::RxMessage::RcCommand {
+                        throttle,
+                        roll,
+                        pitch,
+                    } => {
+                        ctx.shared.commands.lock(|cmds| {
+                            cmds.base_throttle = throttle;
+                            cmds.desired_angles[0] = roll;
+                            cmds.desired_angles[1] = pitch;
+                        });
+                    }
+                    protocol::RxMessage::ArmCommand { armed } => {
+                        ctx.shared.commands.lock(|cmds| {
+                            cmds.arm_request = armed;
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     /// USB interrupt
     #[task(binds = OTG_FS, priority = 1, local = [usb_dev], shared = [usb_ser])]
     fn usb_irq(mut ctx: usb_irq::Context) {
@@ -235,40 +289,40 @@ mod app {
         ctx.shared.usb_ser.lock(|ser| dev.poll(&mut [ser]));
     }
 
-    /// Idle loop — runs when no ISR is active
-    /// Handles telemetry output over USB
-    #[idle(local = [led], shared = [telemetry, usb_ser])]
+    /// Idle loop, runs when no ISR is active
+    /// Handles telemetry output over serial
+    #[idle(local = [led], shared = [telemetry, uart_tx])]
     fn idle(mut ctx: idle::Context) -> ! {
         let mut counter: u32 = 0;
-        let mut buf = [0u8; 200];
+        let mut tx_buf = [0u8; 40];
 
         loop {
             counter = counter.wrapping_add(1);
 
+            // Send telemetry at ~10Hz
             if counter % 500_000 == 0 {
                 ctx.local.led.toggle();
 
-                let mut w = WriteBuf::new(&mut buf);
+                let t = ctx.shared.telemetry.lock(|t| *t);
 
-                ctx.shared.telemetry.lock(|t| {
-                    writeln!(
-                        w,
-                        "r:{:.1} p:{:.1} y:{:.1} m:{},{},{},{} t:{}",
-                        t.attitude.roll,
-                        t.attitude.pitch,
-                        t.attitude.yaw,
-                        t.motor_duties[0],
-                        t.motor_duties[1],
-                        t.motor_duties[2],
-                        t.motor_duties[3],
-                        t.tick,
-                    )
-                    .ok();
-                });
+                defmt::info!("r:{}, p:{}", t.attitude.roll, t.attitude.pitch);
 
-                ctx.shared.usb_ser.lock(|ser| {
-                    usb_serial::write(ser, w.as_bytes());
-                });
+                // UART telemetry to ESP32
+                let len = protocol::encode_telemetry(
+                    &mut tx_buf,
+                    t.attitude.roll,
+                    t.attitude.pitch,
+                    t.attitude.yaw,
+                    0.0,
+                    t.motor_duties,
+                    t.armed,
+                );
+
+                ctx.shared.uart_tx.lock(|tx| {
+                    for &byte in &tx_buf[..len] {
+                        let _ = nb::block!(tx.write(byte));
+                    }
+                })
             }
         }
     }

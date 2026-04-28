@@ -1,20 +1,18 @@
 BINARY = uav-flight-control
 TARGET = thumbv7em-none-eabihf
-ELF = target/$(TARGET)/release/$(BINARY)
-BIN = target/$(BINARY).bin
 
 .PHONY: all build flash clean
 
-all: build flash
+all: run
 
 build:
 	cargo build --release
-	arm-none-eabi-objcopy -O binary $(ELF) $(BIN)
-	@echo "Done"
+
+run:
+	cargo run --release
 
 flash:
-	-sudo dfu-util -a 0 -s 0x08000000:leave -D $(BIN)
+	cargo flash --chip STM32H743VITx --release
 
 clean:
 	cargo clean
-	rm -f $(BIN)

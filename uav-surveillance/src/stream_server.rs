@@ -59,6 +59,11 @@ pub fn start() -> anyhow::Result<EspHttpServer<'static>> {
         anyhow::Ok(())
     })?;
 
+    server.fn_handler("/favicon.ico", esp_idf_svc::http::Method::Get, |req| {
+        req.into_response(204, None, &[])?;
+        anyhow::Ok(())
+    })?;
+
     log::info!("HTTP stream server running");
 
     Ok(server)

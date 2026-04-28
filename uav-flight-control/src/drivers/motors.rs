@@ -41,7 +41,7 @@ impl Motors {
     pub fn new(max_duty: u16) -> Self {
         Self {
             throttle: [0.0; 4],
-            armed: false,
+            armed: true,
             max_duty,
         }
     }
@@ -69,7 +69,7 @@ impl Motors {
 
     /// Set throttle for all 4 motors at once
     #[inline(always)]
-    pub fn set_all(&mut self, val: [f32; 4]) {
+    pub fn set_all_throttles(&mut self, val: [f32; 4]) {
         self.set_throttle::<MOTOR_FL>(val[MOTOR_FL]);
         self.set_throttle::<MOTOR_FR>(val[MOTOR_FR]);
         self.set_throttle::<MOTOR_RL>(val[MOTOR_RL]);
@@ -103,17 +103,17 @@ impl Motors {
             return;
         }
 
-        let t = math::clamp(base_throttle, 0.0, 1.0);
+        let base = math::clamp(base_throttle, 0.0, 1.0);
 
         // X-configuration mixing
         // FL (CW):  +roll, +pitch, +yaw
         // FR (CCW): -roll, +pitch, -yaw
         // RL (CCW): +roll, -pitch, -yaw
         // RR (CW):  -roll, -pitch, +yaw
-        self.set_throttle::<MOTOR_FL>(t + roll + pitch + yaw);
-        self.set_throttle::<MOTOR_FR>(t - roll + pitch - yaw);
-        self.set_throttle::<MOTOR_RL>(t + roll - pitch - yaw);
-        self.set_throttle::<MOTOR_RR>(t - roll - pitch + yaw);
+        self.set_throttle::<MOTOR_FL>(base + roll + pitch + yaw);
+        self.set_throttle::<MOTOR_FR>(base - roll + pitch - yaw);
+        self.set_throttle::<MOTOR_RL>(base + roll - pitch - yaw);
+        self.set_throttle::<MOTOR_RR>(base - roll - pitch + yaw);
     }
 
     /// Get the duty cycle count for a motor (to write to CCR register)
