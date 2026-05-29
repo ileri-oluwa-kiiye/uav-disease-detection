@@ -5,13 +5,13 @@ mod board;
 mod drivers;
 mod flight_control;
 mod math;
-mod protocol;
 
 use defmt_rtt as _;
 use panic_probe as _;
 
 #[rtic::app(device = stm32h7xx_hal::stm32, peripherals = true, dispatchers = [SPI1])]
 mod app {
+    use drone_protocol::{Message, Parser, MAX_FRAME_SIZE};
     use stm32h7xx_hal::{
         nb,
         prelude::*,
@@ -28,7 +28,6 @@ mod app {
             usb_serial::{self, UsbDev, UsbSer},
         },
         flight_control::{Commands, FlightControl, Telemetry},
-        protocol,
     };
 
     #[shared]
@@ -49,7 +48,7 @@ mod app {
         led: board::Led,
         // UART serial loop
         uart_rx: board::Serial1Rx,
-        parser: protocol::Parser,
+        parser: Parser,
     }
 
     #[init]
@@ -163,7 +162,7 @@ mod app {
                 usb_dev,
                 led,
                 uart_rx,
-                parser: protocol::Parser::new(),
+                parser: Parser::new(),
             },
         )
     }
@@ -261,7 +260,7 @@ mod app {
         if let Ok(byte) = ctx.local.uart_rx.read() {
             if let Some(msg) = ctx.local.parser.feed(byte) {
                 match msg {
-                    protocol::RxMessage::RcCommand {
+                    Message::RcCommand {
                         throttle,
                         roll,
                         pitch,
@@ -272,11 +271,12 @@ mod app {
                             cmds.desired_angles[1] = pitch;
                         });
                     }
-                    protocol::RxMessage::ArmCommand { armed } => {
+                    Message::ArmCommand { armed } => {
                         ctx.shared.commands.lock(|cmds| {
                             cmds.arm_request = armed;
                         });
                     }
+                    _ => {}
                 }
             }
         }
@@ -291,10 +291,10 @@ mod app {
 
     /// Idle loop, runs when no ISR is active
     /// Handles telemetry output over serial
-    #[idle(local = [led], shared = [telemetry, uart_tx])]
+    #[idle(local = [led], shared = [commands, telemetry, uart_tx])]
     fn idle(mut ctx: idle::Context) -> ! {
         let mut counter: u32 = 0;
-        let mut tx_buf = [0u8; 40];
+        let mut tx_buf = [0u8; MAX_FRAME_SIZE];
 
         loop {
             counter = counter.wrapping_add(1);
@@ -305,18 +305,25 @@ mod app {
 
                 let t = ctx.shared.telemetry.lock(|t| *t);
 
-                defmt::info!("r:{}, p:{}", t.attitude.roll, t.attitude.pitch);
-
-                // UART telemetry to ESP32
-                let len = protocol::encode_telemetry(
-                    &mut tx_buf,
+                defmt::info!(
+                    "is_armed: {}, r:{}, p:{}, motors: {}",
+                    t.armed,
                     t.attitude.roll,
                     t.attitude.pitch,
-                    t.attitude.yaw,
-                    0.0,
-                    t.motor_duties,
-                    t.armed,
+                    t.motor_duties
                 );
+
+                // UART telemetry to ESP32
+                let len = Message::Telemetry {
+                    roll: t.attitude.roll,
+                    pitch: t.attitude.pitch,
+                    yaw: t.attitude.yaw,
+                    throttle: 0.0,
+                    motor_duties: t.motor_duties,
+                    armed: t.armed,
+                }
+                .encode(&mut tx_buf)
+                .unwrap();
 
                 ctx.shared.uart_tx.lock(|tx| {
                     for &byte in &tx_buf[..len] {

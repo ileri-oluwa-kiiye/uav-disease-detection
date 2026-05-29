@@ -4,12 +4,16 @@ import base64
 import io
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List
+from zipfile import Path as ZipPath
 
 from app.inference import predict_image
 from app.model import load_model
 from app.utils import read_imagefile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticFiles import StaticFiles
 from PIL import Image
 
 from fastapi import FastAPI, File, Form, UploadFile
@@ -82,3 +86,21 @@ async def predict(
         "longitude": longitude,
         "timestamp": ts,
     }
+
+
+# --- Serve frontend ---
+DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+# Serve built assets (JS, CSS, images) at /assets
+if (DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
+
+
+# SPA fallback: any non-API path returns index.html, letting Svelte handle routing
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    # If the exact file exists in dist (e.g. favicon, manifest), serve it
+    file = DIST / full_path
+    if full_path and file.is_file():
+        return FileResponse(file)
+    return FileResponse(DIST / "index.html")

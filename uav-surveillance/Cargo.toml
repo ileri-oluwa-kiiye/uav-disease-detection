@@ -1,3 +1,4 @@
+
 [package]
 name = "uav-surveillance"
 version = "0.1.0"
@@ -18,6 +19,7 @@ debug = true    # Symbols are nice, and they don't increase the size on Flash
 opt-level = "z"
 
 [dependencies]
+drone-protocol = { path = "../drone-protocol" }
 log = "0.4"
 esp-idf-svc = { version = "0.52.1", features = [
     "critical-section",

@@ -130,7 +130,7 @@ pub fn default_angle_config() -> PidConfig {
             kd: 0.0,
         },
         integral_limit: 20.0,
-        output_limit: 300.0, // max rate command in dps
+        output_limit: 300.0,
     }
 }
 

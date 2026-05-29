@@ -1,5 +1,3 @@
-use std::ptr::NonNull;
-
 use esp_idf_svc::sys::camera::*;
 
 #[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -15,11 +13,9 @@ const CAM_PIN_D4: i32 = 12;
 const CAM_PIN_D5: i32 = 18;
 const CAM_PIN_D6: i32 = 17;
 const CAM_PIN_D7: i32 = 16;
-
 const CAM_PIN_XCLK: i32 = 15;
 const CAM_PIN_PCLK: i32 = 13;
 const CAM_PIN_VSYNC: i32 = 6;
-
 const CAM_PIN_HREF: i32 = 7;
 const CAM_PIN_SDA: i32 = 4;
 const CAM_PIN_SCL: i32 = 5;
