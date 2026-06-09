@@ -5,6 +5,7 @@ mod board;
 mod drivers;
 mod flight_control;
 mod math;
+mod position;
 
 use defmt_rtt as _;
 use panic_probe as _;
@@ -12,6 +13,7 @@ use panic_probe as _;
 #[rtic::app(device = stm32h7xx_hal::stm32, peripherals = true, dispatchers = [SPI1])]
 mod app {
     use drone_protocol::{Message, Parser, MAX_FRAME_SIZE};
+    use rtic_monotonics::stm32::prelude::*;
     use stm32h7xx_hal::{
         nb,
         prelude::*,
@@ -25,14 +27,14 @@ mod app {
         drivers::{
             icm42688p::Icm42688p,
             motors::{MOTOR_FL, MOTOR_FR, MOTOR_RL, MOTOR_RR},
-            usb_serial::{self, UsbDev, UsbSer},
         },
-        flight_control::{Commands, FlightControl, Telemetry},
+        flight_control::{Commands, FlightControl, FlightMode, Telemetry},
     };
+
+    stm32_tim5_monotonic!(Mono, 1_000_000); // 1 MHz -> microsecond ticks
 
     #[shared]
     struct Shared {
-        usb_ser: UsbSer,
         commands: Commands,
         telemetry: Telemetry,
         uart_tx: board::Serial1Tx,
@@ -42,12 +44,11 @@ mod app {
     struct Local {
         // Flight loop (TIM2 ISR owns these exclusively)
         fc: FlightControl,
-        // USB serial loop
-        usb_dev: UsbDev,
         // Idle loop
         led: board::Led,
         // UART serial loop
         uart_rx: board::Serial1Rx,
+        // comms protocol parser
         parser: Parser,
     }
 
@@ -75,18 +76,6 @@ mod app {
         let gpioe = dp.GPIOE.split(ccdr.peripheral.GPIOE);
         let led = gpioe.pe3.into_push_pull_output();
 
-        // USB
-        let gpioa = dp.GPIOA.split(ccdr.peripheral.GPIOA);
-        let (usb_dev, usb_ser) = usb_serial::init(
-            dp.OTG2_HS_GLOBAL,
-            dp.OTG2_HS_DEVICE,
-            dp.OTG2_HS_PWRCLK,
-            gpioa.pa11.into_alternate::<10>(),
-            gpioa.pa12.into_alternate::<10>(),
-            ccdr.peripheral.USB2OTG,
-            &ccdr.clocks,
-        );
-
         // SPI2 for IMU
         let gpiob = dp.GPIOB.split(ccdr.peripheral.GPIOB);
         let gpioc = dp.GPIOC.split(ccdr.peripheral.GPIOC);
@@ -103,10 +92,15 @@ mod app {
             &ccdr.clocks,
         );
 
+        let tim5_clock_hz = ccdr.clocks.timx_ker_ck().raw();
+        defmt::info!("TIM5 ker_ck = {} Hz", tim5_clock_hz);
+        Mono::start(240_000_000);
+
         let mut imu = Icm42688p::new(spi2, cs);
         imu.init().expect("IMU init failed");
 
         // PWM for motors (TIM3, 50Hz)
+        let gpioa = dp.GPIOA.split(ccdr.peripheral.GPIOA);
         let (mut ch1, mut ch2, mut ch3, mut ch4) = dp.TIM3.pwm(
             (
                 gpioa.pa6.into_alternate::<2>(),
@@ -124,6 +118,20 @@ mod app {
         ch3.enable();
         ch4.enable();
         let max_duty = ch1.get_max_duty() as u16;
+
+        // ESC idle = 1000µs of the 20ms (50Hz) frame — the same value Motors emits
+        // when disarmed. Write it the instant the outputs go live so the ESCs see a
+        // valid minimum-throttle signal instead of the 0µs reset value.
+        let idle_duty = max_duty / 20;
+        ch1.set_duty(idle_duty);
+        ch2.set_duty(idle_duty);
+        ch3.set_duty(idle_duty);
+        ch4.set_duty(idle_duty);
+
+        // Hold steady idle so the ESCs arm/calibrate before the flight loop and UART
+        // RX come online. Interrupts are masked until init returns, so nothing else
+        // touches the outputs during this window.
+        cortex_m::asm::delay(480_000_000); // ~2s at 240MHz
 
         // TIM2 at 1kHz
         let mut timer = dp.TIM2.timer(1.kHz(), ccdr.peripheral.TIM2, &ccdr.clocks);
@@ -152,14 +160,12 @@ mod app {
 
         (
             Shared {
-                usb_ser,
                 telemetry: Telemetry::default(),
                 commands: Commands::default(),
                 uart_tx,
             },
             Local {
                 fc: FlightControl::init(imu, timer, ch1, ch2, ch3, ch4, max_duty),
-                usb_dev,
                 led,
                 uart_rx,
                 parser: Parser::new(),
@@ -167,8 +173,7 @@ mod app {
         )
     }
 
-    /// Flight control loop, runs at exactly 1kHz in TIM2 ISR
-    /// Priority 2 (higher than USB, lower than nothing)
+    /// Flight control loop, runs at exactly 1kHz in TIM2 ISR. Highest priority.
     #[task(binds = TIM2, priority = 2, local = [fc], shared = [telemetry, commands])]
     fn flight_loop(mut ctx: flight_loop::Context) {
         let fc = ctx.local.fc;
@@ -177,16 +182,33 @@ mod app {
         fc.timer.clear_irq();
 
         // 2. Read commands (short lock)
-        let cmds = ctx.shared.commands.lock(|c| *c);
+        let cmds = ctx.shared.commands.lock(|c| {
+            let snap = *c;
+            c.move_request = None;
+            c.manual_override = false;
+            snap
+        });
 
-        // 3. Arm/disarm
-        match cmds.arm_request {
-            true => fc.motors.arm(),
-            false => {
-                fc.motors.disarm();
-                fc.rate_pids.reset();
-                fc.angle_pids.reset();
-            }
+        // 3. Arm/disarm + link-loss failsafe
+        const RC_TIMEOUT_US: u64 = 300_000; // 300 ms
+        let now_us = Mono::now().ticks();
+
+        // let link_alive = now_us.saturating_sub(cmds.last_rc_us) < RC_TIMEOUT_US;
+
+        if cmds.arm_request {
+            fc.motors.arm();
+        } else {
+            fc.motors.disarm();
+            fc.rate_pids.reset();
+            fc.angle_pids.reset();
+            fc.mode = FlightMode::Manual;
+        }
+
+        if let Some(delta) = cmds.move_request {
+            let p = fc.estimator.pos;
+            fc.nav_target = [p[0] + delta[0], p[1] + delta[1], p[2] + delta[2]];
+            fc.nav_yaw = fc.ahrs.attitude().yaw; // hold current heading
+            fc.mode = FlightMode::Position;
         }
 
         // 4. Read IMU
@@ -211,15 +233,23 @@ mod app {
         if fc.tick_count % 4 == 0 {
             let att = fc.ahrs.attitude();
 
-            let angle_out =
-                fc.angle_pids
-                    .update(cmds.desired_angles, [att.roll, att.pitch, att.yaw], 0.004);
+            let (target_angles, base_throttle) = match fc.mode {
+                FlightMode::Manual => (cmds.desired_angles, cmds.base_throttle),
+                FlightMode::Position => {
+                    let nav = fc
+                        .position_ctrl
+                        .update(fc.nav_target, &fc.estimator, att.yaw);
+                    ([nav.roll, nav.pitch, fc.nav_yaw], nav.throttle)
+                }
+            };
 
-            fc.desired_rates = [
-                angle_out.roll.output,
-                angle_out.pitch.output,
-                angle_out.yaw.output,
-            ];
+            fc.base_throttle = base_throttle;
+
+            let out = fc
+                .angle_pids
+                .update(target_angles, [att.roll, att.pitch, att.yaw], 0.004);
+
+            fc.desired_rates = [out.roll.output, out.pitch.output, out.yaw.output];
         }
 
         // 7. Inner loop at 1kHz
@@ -231,7 +261,7 @@ mod app {
 
         // 8. Mix Motors
         fc.motors.mix(
-            cmds.base_throttle,
+            fc.base_throttle,
             pid_out.roll.output,
             pid_out.pitch.output,
             pid_out.yaw.output,
@@ -257,36 +287,32 @@ mod app {
     /// UART RX interrupt. Parse incoming bytes from ESP32
     #[task(binds = USART1, priority = 1, local = [uart_rx, parser], shared = [commands])]
     fn uart_rx(mut ctx: uart_rx::Context) {
-        if let Ok(byte) = ctx.local.uart_rx.read() {
-            if let Some(msg) = ctx.local.parser.feed(byte) {
-                match msg {
-                    Message::RcCommand {
-                        throttle,
-                        roll,
-                        pitch,
-                    } => {
-                        ctx.shared.commands.lock(|cmds| {
-                            cmds.base_throttle = throttle;
-                            cmds.desired_angles[0] = roll;
-                            cmds.desired_angles[1] = pitch;
-                        });
-                    }
-                    Message::ArmCommand { armed } => {
-                        ctx.shared.commands.lock(|cmds| {
-                            cmds.arm_request = armed;
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+        let Ok(byte) = ctx.local.uart_rx.read() else {
+            return;
+        };
 
-    /// USB interrupt
-    #[task(binds = OTG_FS, priority = 1, local = [usb_dev], shared = [usb_ser])]
-    fn usb_irq(mut ctx: usb_irq::Context) {
-        let dev = ctx.local.usb_dev;
-        ctx.shared.usb_ser.lock(|ser| dev.poll(&mut [ser]));
+        let Some(msg) = ctx.local.parser.feed(byte) else {
+            return;
+        };
+
+        ctx.shared.commands.lock(|cmds| {
+            cmds.last_rc_us = Mono::now().ticks();
+            match msg {
+                Message::RcCommand {
+                    throttle,
+                    roll,
+                    pitch,
+                } => {
+                    cmds.base_throttle = throttle;
+                    cmds.desired_angles[0] = roll;
+                    cmds.desired_angles[1] = pitch;
+                    cmds.manual_override = true;
+                }
+                Message::ArmCommand { armed } => cmds.arm_request = armed,
+                Message::MoveCommand { x, y, z } => cmds.move_request = Some([x, y, z]),
+                _ => {}
+            }
+        });
     }
 
     /// Idle loop, runs when no ISR is active

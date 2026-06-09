@@ -13,7 +13,7 @@ from app.model import load_model
 from app.utils import read_imagefile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticFiles import StaticFiles
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 from fastapi import FastAPI, File, Form, UploadFile

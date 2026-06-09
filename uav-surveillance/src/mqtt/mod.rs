@@ -1,8 +1,7 @@
 pub mod client;
-mod encode;
-pub mod session;
+pub mod encode;
 
-mod packet_type {
+pub mod packet_type {
     pub const CONNECT: u8 = 1 << 4;
     pub const CONNACK: u8 = 2 << 4;
     pub const PUBLISH: u8 = 3 << 4;
@@ -19,7 +18,7 @@ mod packet_type {
     pub const DISCONNECT: u8 = 14 << 4;
 }
 
-mod flags {
+pub mod flags {
     // Fixed header byte = (packet_type << 4) | flags
     // Most packet types have flags = 0, except these:
     pub const SUBSCRIBE_FLAGS: u8 = 0x02; // spec mandates bit 1 set
@@ -50,9 +49,9 @@ mod flags {
     pub const CONNACK_NOT_AUTHORIZED: u8 = 0x05;
 }
 
-const PROTOCOL_NAME: &[u8] = &[0x00, 0x04, b'M', b'Q', b'T', b'T'];
-const PROTOCOL_LEVEL_3_1_1: u8 = 0x04;
-const VARIABLE_HEADER_LEN: usize = 10;
+pub const PROTOCOL_NAME: &[u8] = &[0x00, 0x04, b'M', b'Q', b'T', b'T'];
+pub const PROTOCOL_LEVEL_3_1_1: u8 = 0x04;
+pub const VARIABLE_HEADER_LEN: usize = 10;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MqttError {

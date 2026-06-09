@@ -41,7 +41,7 @@ impl Motors {
     pub fn new(max_duty: u16) -> Self {
         Self {
             throttle: [0.0; 4],
-            armed: true,
+            armed: false,
             max_duty,
         }
     }

@@ -33,13 +33,13 @@ pub struct Telemetry {
 /// Cloneable handle for talking to the flight controller. Cheap to clone; share
 /// it across threads (e.g. hand a clone to the MQTT control handler).
 #[derive(Clone)]
-pub struct CommsHandle {
+pub struct Comms {
     tx: Arc<Mutex<UartTxDriver<'static>>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
     last_rx_ms: Arc<AtomicU32>,
 }
 
-impl CommsHandle {
+impl Comms {
     /// Encode and transmit one frame. The mutex keeps frames atomic relative to
     /// other senders, so the STM never sees two frames interleaved.
     pub fn send(&self, msg: Message) {
@@ -81,7 +81,7 @@ pub fn start<UART: Uart + 'static>(
     tx_pin: Gpio1<'static>,
     rx_pin: Gpio2<'static>,
     baud: u32,
-) -> anyhow::Result<CommsHandle> {
+) -> anyhow::Result<Comms> {
     let config = Config::new().baudrate(Hertz(baud));
 
     let driver = UartDriver::new(
@@ -110,7 +110,7 @@ pub fn start<UART: Uart + 'static>(
             .spawn(move || rx_loop(uart_rx, telemetry, last_rx_ms))?;
     }
 
-    Ok(CommsHandle {
+    Ok(Comms {
         tx: Arc::new(Mutex::new(uart_tx)),
         telemetry,
         last_rx_ms,

@@ -24,9 +24,17 @@ use crate::{
         motors::Motors,
         pid::{FlightPidOutput, FlightPids, PidConfig, PidGains},
     },
+    position::{PositionConfig, PositionController, PositionEstimate},
 };
 
-/// Telemetry snapshot. Read by main loop for USB output
+#[derive(Clone, Copy, PartialEq, Default)]
+pub enum FlightMode {
+    #[default]
+    Manual,
+    Position,
+}
+
+/// Telemetry snapshot
 #[derive(Clone, Copy, Default)]
 pub struct Telemetry {
     pub attitude: Attitude,
@@ -44,6 +52,9 @@ pub struct Commands {
     pub desired_angles: [f32; 3],
     pub base_throttle: f32,
     pub arm_request: bool,
+    pub last_rc_us: u64,
+    pub manual_override: bool,
+    pub move_request: Option<[f32; 3]>,
 }
 
 /// Everything the ISR needs
@@ -65,6 +76,14 @@ pub struct FlightControl {
     // State
     pub desired_rates: [f32; 3],
     pub tick_count: u32,
+
+    // control
+    pub mode: FlightMode,
+    pub position_ctrl: PositionController,
+    pub estimator: PositionEstimate,
+    pub nav_target: [f32; 3],
+    pub nav_yaw: f32,
+    pub base_throttle: f32,
 }
 
 impl FlightControl {
@@ -93,6 +112,12 @@ impl FlightControl {
             motors: Motors::new(max_duty),
             desired_rates: [0.0; 3],
             tick_count: 0,
+            mode: FlightMode::Manual,
+            position_ctrl: PositionController::new(default_position_config()),
+            estimator: PositionEstimate::default(),
+            nav_target: [0.0; 3],
+            nav_yaw: 0.0,
+            base_throttle: 0.0,
         }
     }
 }
@@ -106,7 +131,7 @@ pub fn default_rate_config() -> PidConfig {
             kd: 0.01,
         },
         integral_limit: 50.0,
-        output_limit: 0.3, // max contribution to throttle [0-1]
+        output_limit: 0.3,
     }
 }
 
@@ -143,5 +168,18 @@ pub fn default_angle_yaw_config() -> PidConfig {
         },
         integral_limit: 20.0,
         output_limit: 200.0,
+    }
+}
+
+pub fn default_position_config() -> PositionConfig {
+    PositionConfig {
+        kp_xy: 1.0,
+        kd_xy: 2.0,
+        kp_z: 0.10,
+        kd_z: 0.05,
+        max_tilt_deg: 15.0,
+        hover_throttle: 0.5,
+        arrive_radius_m: 0.5,
+        arrive_speed_mps: 0.3,
     }
 }

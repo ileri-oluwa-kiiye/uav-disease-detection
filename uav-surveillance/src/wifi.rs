@@ -22,7 +22,7 @@ pub fn connect(
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
         ssid: WIFI_SSID.try_into()?,
         password: WIFI_PASS.try_into()?,
-        auth_method: AuthMethod::WPA2Personal,
+        auth_method: AuthMethod::None,
         ..Default::default()
     }))?;
 
@@ -35,8 +35,8 @@ pub fn connect(
                 break;
             }
             Err(e) => {
-                log::warn!("Connect failed: {:?}, retrying in 2s...", e);
-                std::thread::sleep(std::time::Duration::from_secs(2));
+                log::warn!("Connect failed: {:?}, retrying in 1s...", e);
+                std::thread::sleep(std::time::Duration::from_secs(1));
             }
         }
     }

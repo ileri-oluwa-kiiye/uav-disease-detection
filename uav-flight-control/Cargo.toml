@@ -18,7 +18,7 @@ cortex-m-rt = "0.7"
 stm32h7xx-hal = { version = "0.16.0", features = ["stm32h743v", "rt", "usb_hs"] }
 embedded-hal = "0.2.6"
 rtic = { version = "2", features = ["thumbv7-backend"] }
-rtic-monotonics = { version = "2", features = ["stm32h743vi"] }
+rtic-monotonics = { version = "2", features = ["stm32h743vi", "stm32_tim5"] }
 synopsys-usb-otg = {version = "0.5.0", features = ["hs"]}
 usb-device = "0.3"
 usbd-serial = "0.2"

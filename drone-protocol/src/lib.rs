@@ -18,6 +18,7 @@ pub const SYNC_BYTE: u8 = 0xAA;
 
 pub const MSG_RC_COMMAND: u8 = 0x01;
 pub const MSG_ARM_COMMAND: u8 = 0x02;
+pub const MSG_MOVE_COMMAND: u8 = 0x03;
 pub const MSG_TELEMETRY: u8 = 0x10;
 pub const MSG_HEARTBEAT: u8 = 0x11;
 
@@ -35,6 +36,11 @@ pub enum Message {
     },
     ArmCommand {
         armed: bool,
+    },
+    MoveCommand {
+        x: f32,
+        y: f32,
+        z: f32,
     },
     /// 28-byte payload: 26 meaningful bytes + 2 pad, so a `#[repr(C)]`
     /// struct (4xf32, 4xu16, u8) maps 1:1 with no surprises.
@@ -56,6 +62,7 @@ impl Message {
         match self {
             Message::RcCommand { .. } => MSG_RC_COMMAND,
             Message::ArmCommand { .. } => MSG_ARM_COMMAND,
+            Message::MoveCommand { .. } => MSG_MOVE_COMMAND,
             Message::Telemetry { .. } => MSG_TELEMETRY,
             Message::Heartbeat { .. } => MSG_HEARTBEAT,
         }
@@ -65,6 +72,7 @@ impl Message {
         match self {
             Message::RcCommand { .. } => 12,
             Message::ArmCommand { .. } => 1,
+            Message::MoveCommand { .. } => 12,
             Message::Telemetry { .. } => 28,
             Message::Heartbeat { .. } => 4,
         }
@@ -96,6 +104,11 @@ impl Message {
             }
             Message::ArmCommand { armed } => {
                 p[0] = armed as u8;
+            }
+            Message::MoveCommand { x, y, z } => {
+                p[0..4].copy_from_slice(&x.to_le_bytes());
+                p[4..8].copy_from_slice(&y.to_le_bytes());
+                p[8..12].copy_from_slice(&z.to_le_bytes());
             }
             Message::Telemetry {
                 roll,
@@ -138,6 +151,11 @@ impl Message {
             },
             (MSG_ARM_COMMAND, 1) => Message::ArmCommand {
                 armed: payload[0] != 0,
+            },
+            (MSG_MOVE_COMMAND, 12) => Message::MoveCommand {
+                x: f32::from_le_bytes(payload[0..4].try_into().ok()?),
+                y: f32::from_le_bytes(payload[4..8].try_into().ok()?),
+                z: f32::from_le_bytes(payload[8..12].try_into().ok()?),
             },
             (MSG_TELEMETRY, 28) => Message::Telemetry {
                 roll: f32::from_le_bytes(payload[0..4].try_into().ok()?),

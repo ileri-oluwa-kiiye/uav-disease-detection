@@ -1,9 +1,12 @@
-all: mqtt dashboard
+all: mqtt dashboard venv
 
 mqtt:
 	mosquitto -c mosquitto.conf -v
 
 dashboard:
-	uvicorn fastapi/main:app --reload
+	cd fastapi && uvicorn app.main:app --reload
 
-.PHONY: mqtt dashboard
+venv:
+	source fastapi/.venv/bin/activate
+
+.PHONY: mqtt dashboard venv

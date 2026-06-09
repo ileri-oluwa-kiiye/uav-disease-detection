@@ -24,8 +24,7 @@
     }
 
     onMount(() => {
-        const brokerUrl =
-            import.meta.env.VITE_MQTT_BROKER_URL ?? "ws://localhost:9001";
+        const brokerUrl = "ws://localhost:9002";
         connect({ brokerUrl });
         return () => disconnect();
     });
