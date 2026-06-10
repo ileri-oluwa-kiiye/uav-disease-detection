@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use drone_protocol::{Message, Parser, MAX_FRAME_SIZE};
+use drone_protocol::{Message, Parser, RcCommand, Telemetry, MAX_FRAME_SIZE};
 use esp_idf_svc::hal::gpio::{Gpio1, Gpio2};
 use esp_idf_svc::hal::{
     delay::BLOCK,
@@ -18,17 +18,6 @@ use esp_idf_svc::hal::{
     uart::{config::Config, Uart, UartDriver, UartRxDriver, UartTxDriver},
     units::Hertz,
 };
-
-/// Latest telemetry decoded from the flight controller.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Telemetry {
-    pub roll: f32,
-    pub pitch: f32,
-    pub yaw: f32,
-    pub throttle: f32,
-    pub motor_duties: [u16; 4],
-    pub armed: bool,
-}
 
 /// Cloneable handle for talking to the flight controller. Cheap to clone; share
 /// it across threads (e.g. hand a clone to the MQTT control handler).
@@ -52,15 +41,15 @@ impl Comms {
     }
 
     pub fn send_rc(&self, throttle: f32, roll: f32, pitch: f32) {
-        self.send(Message::RcCommand {
+        self.send(Message::RcCommand(RcCommand {
             throttle,
             roll,
             pitch,
-        });
+        }));
     }
 
     pub fn send_arm(&self, armed: bool) {
-        self.send(Message::ArmCommand { armed });
+        self.send(Message::ArmCommand(armed));
     }
 
     /// Most recent telemetry frame, if any has arrived.
@@ -133,26 +122,10 @@ fn rx_loop(
             Ok(1) => {
                 if let Some(msg) = parser.feed(byte[0]) {
                     last_rx_ms.store(now_ms(), Ordering::Relaxed);
-                    if let Message::Telemetry {
-                        roll,
-                        pitch,
-                        yaw,
-                        throttle,
-                        motor_duties,
-                        armed,
-                    } = msg
-                    {
-                        *telemetry.lock().unwrap() = Some(Telemetry {
-                            roll,
-                            pitch,
-                            yaw,
-                            throttle,
-                            motor_duties,
-                            armed,
-                        });
+                    if let Message::Telemetry(tele) = msg {
+                        println!("got telemetry");
+                        *telemetry.lock().unwrap() = Some(tele);
                     }
-                    // Heartbeat and any echoed RC/Arm fall through; last_rx_ms
-                    // already bumped, which is what the link-alive check needs.
                 }
             }
             Ok(_) => {}

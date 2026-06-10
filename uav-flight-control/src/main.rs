@@ -99,6 +99,15 @@ mod app {
         let mut imu = Icm42688p::new(spi2, cs);
         imu.init().expect("IMU init failed");
 
+        // Gyro bias — craft MUST be stationary and level at power-up.
+        match imu.calibrate_gyro(2000) {
+            Ok(bias) => defmt::info!("gyro bias (dps): {}", bias),
+            Err(crate::drivers::icm42688p::Error::MotionDetected(spread)) => {
+                defmt::warn!("gyro cal spread {} dps too high", spread)
+            }
+            Err(_) => defmt::warn!("gyro cal: sensor error"),
+        }
+
         // PWM for motors (TIM3, 50Hz)
         let gpioa = dp.GPIOA.split(ccdr.peripheral.GPIOA);
         let (mut ch1, mut ch2, mut ch3, mut ch4) = dp.TIM3.pwm(
@@ -158,6 +167,11 @@ mod app {
 
         let (uart_tx, uart_rx) = uart.split();
 
+        let mut fc = FlightControl::init(imu, timer, ch1, ch2, ch3, ch4, max_duty);
+        // Settle the AHRS and capture level trim (craft still level & stationary).
+        fc.calibrate_level(1500, 500);
+        defmt::info!("level trim (deg): {}", fc.level_trim);
+
         (
             Shared {
                 telemetry: Telemetry::default(),
@@ -165,7 +179,7 @@ mod app {
                 uart_tx,
             },
             Local {
-                fc: FlightControl::init(imu, timer, ch1, ch2, ch3, ch4, max_duty),
+                fc,
                 led,
                 uart_rx,
                 parser: Parser::new(),
@@ -188,12 +202,6 @@ mod app {
             c.manual_override = false;
             snap
         });
-
-        // 3. Arm/disarm + link-loss failsafe
-        const RC_TIMEOUT_US: u64 = 300_000; // 300 ms
-        let now_us = Mono::now().ticks();
-
-        // let link_alive = now_us.saturating_sub(cmds.last_rc_us) < RC_TIMEOUT_US;
 
         if cmds.arm_request {
             fc.motors.arm();
@@ -231,7 +239,7 @@ mod app {
 
         // 6. Outer loop at 250Hz
         if fc.tick_count % 4 == 0 {
-            let att = fc.ahrs.attitude();
+            let att = fc.attitude_trimmed();
 
             let (target_angles, base_throttle) = match fc.mode {
                 FlightMode::Manual => (cmds.desired_angles, cmds.base_throttle),
@@ -276,7 +284,7 @@ mod app {
 
         // 10. Update telemetry (short lock)
         ctx.shared.telemetry.lock(|t| {
-            t.attitude = fc.ahrs.attitude();
+            t.attitude = fc.attitude_trimmed();
             t.gyro = [reading.gyro_x, reading.gyro_y, reading.gyro_z];
             t.motor_duties = duties;
             t.tick = fc.tick_count;
@@ -298,18 +306,18 @@ mod app {
         ctx.shared.commands.lock(|cmds| {
             cmds.last_rc_us = Mono::now().ticks();
             match msg {
-                Message::RcCommand {
+                Message::RcCommand(drone_protocol::RcCommand {
                     throttle,
                     roll,
                     pitch,
-                } => {
+                }) => {
                     cmds.base_throttle = throttle;
                     cmds.desired_angles[0] = roll;
                     cmds.desired_angles[1] = pitch;
                     cmds.manual_override = true;
                 }
-                Message::ArmCommand { armed } => cmds.arm_request = armed,
-                Message::MoveCommand { x, y, z } => cmds.move_request = Some([x, y, z]),
+                Message::ArmCommand(armed) => cmds.arm_request = armed,
+                Message::MoveCommand(mov) => cmds.move_request = Some(mov),
                 _ => {}
             }
         });
@@ -340,14 +348,15 @@ mod app {
                 );
 
                 // UART telemetry to ESP32
-                let len = Message::Telemetry {
+                let len = Message::Telemetry(drone_protocol::Telemetry {
                     roll: t.attitude.roll,
                     pitch: t.attitude.pitch,
                     yaw: t.attitude.yaw,
                     throttle: 0.0,
                     motor_duties: t.motor_duties,
                     armed: t.armed,
-                }
+                    tick: t.tick,
+                })
                 .encode(&mut tx_buf)
                 .unwrap();
 

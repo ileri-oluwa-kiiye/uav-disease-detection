@@ -69,6 +69,7 @@ pub struct FlightControl {
 
     // Filters & controllers
     pub ahrs: MadgwickFilter,
+    pub level_trim: [f32; 2],
     pub rate_pids: FlightPids,
     pub angle_pids: FlightPids,
     pub motors: Motors,
@@ -107,6 +108,7 @@ impl FlightControl {
             ch3,
             ch4,
             ahrs: MadgwickFilter::new(1000.0, 0.033),
+            level_trim: [0.0; 2],
             rate_pids: FlightPids::new(default_rate_config(), default_rate_yaw_config()),
             angle_pids: FlightPids::new(default_angle_config(), default_angle_yaw_config()),
             motors: Motors::new(max_duty),
@@ -118,6 +120,49 @@ impl FlightControl {
             nav_target: [0.0; 3],
             nav_yaw: 0.0,
             base_throttle: 0.0,
+        }
+    }
+
+    /// Run the AHRS to convergence on a level, stationary craft, then capture
+    /// the residual roll/pitch as a level-trim offset. Call once after the gyro
+    /// is calibrated and before flight. ~1 ms per iteration at 240 MHz.
+    pub fn calibrate_level(&mut self, settle_iters: u32, trim_samples: u32) {
+        // 1. Let the Madgwick quaternion converge from identity to true gravity.
+        for _ in 0..settle_iters {
+            if let Ok(r) = self.imu.read_scaled() {
+                self.ahrs.update(
+                    r.gyro_x, r.gyro_y, r.gyro_z, r.accel_x, r.accel_y, r.accel_z,
+                );
+            }
+            cortex_m::asm::delay(240_000);
+        }
+
+        // 2. Average the converged attitude as the level reference.
+        let mut sum_r = 0.0f32;
+        let mut sum_p = 0.0f32;
+        for _ in 0..trim_samples {
+            if let Ok(r) = self.imu.read_scaled() {
+                self.ahrs.update(
+                    r.gyro_x, r.gyro_y, r.gyro_z, r.accel_x, r.accel_y, r.accel_z,
+                );
+            }
+            let a = self.ahrs.attitude();
+            sum_r += a.roll;
+            sum_p += a.pitch;
+            cortex_m::asm::delay(240_000);
+        }
+
+        let n = trim_samples as f32;
+        self.level_trim = [sum_r / n, sum_p / n];
+    }
+
+    /// Attitude with level trim removed — use this as the control measurement.
+    pub fn attitude_trimmed(&self) -> Attitude {
+        let a = self.ahrs.attitude();
+        Attitude {
+            roll: a.roll - self.level_trim[0],
+            pitch: a.pitch - self.level_trim[1],
+            yaw: a.yaw,
         }
     }
 }

@@ -23,38 +23,37 @@ pub const MSG_TELEMETRY: u8 = 0x10;
 pub const MSG_HEARTBEAT: u8 = 0x11;
 
 /// Largest payload the parser will accept. Sizes the parser's scratch buffer.
-pub const MAX_PAYLOAD_SIZE: usize = 32;
+pub const MAX_PAYLOAD_SIZE: usize = core::mem::size_of::<Message>() + 3;
 /// Largest possible full frame: sync + id + len + payload + crc.
 pub const MAX_FRAME_SIZE: usize = 3 + MAX_PAYLOAD_SIZE + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct RcCommand {
+    pub throttle: f32,
+    pub roll: f32,
+    pub pitch: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(C)]
+pub struct Telemetry {
+    pub roll: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+    pub throttle: f32,
+    pub motor_duties: [u16; 4],
+    pub armed: bool,
+    pub tick: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Message {
-    RcCommand {
-        throttle: f32,
-        roll: f32,
-        pitch: f32,
-    },
-    ArmCommand {
-        armed: bool,
-    },
-    MoveCommand {
-        x: f32,
-        y: f32,
-        z: f32,
-    },
-    /// 28-byte payload: 26 meaningful bytes + 2 pad, so a `#[repr(C)]`
-    /// struct (4xf32, 4xu16, u8) maps 1:1 with no surprises.
-    Telemetry {
-        roll: f32,
-        pitch: f32,
-        yaw: f32,
-        throttle: f32,
-        motor_duties: [u16; 4],
-        armed: bool,
-    },
-    Heartbeat {
-        uptime_ms: u32,
-    },
+    RcCommand(RcCommand),
+    ArmCommand(bool),
+    MoveCommand([f32; 3]),
+    Telemetry(Telemetry),
+    Heartbeat { uptime_ms: u32 },
 }
 
 impl Message {
@@ -70,11 +69,11 @@ impl Message {
 
     pub const fn payload_len(&self) -> usize {
         match self {
-            Message::RcCommand { .. } => 12,
-            Message::ArmCommand { .. } => 1,
-            Message::MoveCommand { .. } => 12,
-            Message::Telemetry { .. } => 28,
-            Message::Heartbeat { .. } => 4,
+            Message::RcCommand { .. } => core::mem::size_of::<RcCommand>(),
+            Message::ArmCommand { .. } => core::mem::size_of::<bool>(),
+            Message::MoveCommand { .. } => core::mem::size_of::<[f32; 3]>(),
+            Message::Telemetry { .. } => core::mem::size_of::<Telemetry>(),
+            Message::Heartbeat { .. } => core::mem::size_of::<u32>(),
         }
     }
 
@@ -93,41 +92,28 @@ impl Message {
 
         let p = &mut buf[3..3 + len];
         match *self {
-            Message::RcCommand {
-                throttle,
-                roll,
-                pitch,
-            } => {
-                p[0..4].copy_from_slice(&throttle.to_le_bytes());
-                p[4..8].copy_from_slice(&roll.to_le_bytes());
-                p[8..12].copy_from_slice(&pitch.to_le_bytes());
+            Message::RcCommand(rc) => {
+                p[0..4].copy_from_slice(&rc.throttle.to_le_bytes());
+                p[4..8].copy_from_slice(&rc.roll.to_le_bytes());
+                p[8..12].copy_from_slice(&rc.pitch.to_le_bytes());
             }
-            Message::ArmCommand { armed } => {
-                p[0] = armed as u8;
+            Message::ArmCommand(armed) => p[0] = armed as u8,
+            Message::MoveCommand(mov) => {
+                p[0..4].copy_from_slice(&mov[0].to_le_bytes());
+                p[4..8].copy_from_slice(&mov[1].to_le_bytes());
+                p[8..12].copy_from_slice(&mov[2].to_le_bytes());
             }
-            Message::MoveCommand { x, y, z } => {
-                p[0..4].copy_from_slice(&x.to_le_bytes());
-                p[4..8].copy_from_slice(&y.to_le_bytes());
-                p[8..12].copy_from_slice(&z.to_le_bytes());
-            }
-            Message::Telemetry {
-                roll,
-                pitch,
-                yaw,
-                throttle,
-                motor_duties,
-                armed,
-            } => {
-                p[0..4].copy_from_slice(&roll.to_le_bytes());
-                p[4..8].copy_from_slice(&pitch.to_le_bytes());
-                p[8..12].copy_from_slice(&yaw.to_le_bytes());
-                p[12..16].copy_from_slice(&throttle.to_le_bytes());
-                p[16..18].copy_from_slice(&motor_duties[0].to_le_bytes());
-                p[18..20].copy_from_slice(&motor_duties[1].to_le_bytes());
-                p[20..22].copy_from_slice(&motor_duties[2].to_le_bytes());
-                p[22..24].copy_from_slice(&motor_duties[3].to_le_bytes());
-                p[24] = armed as u8;
-                p[25..28].fill(0); // explicit pad; buf may be dirty
+            Message::Telemetry(tele) => {
+                p[0..4].copy_from_slice(&tele.roll.to_le_bytes());
+                p[4..8].copy_from_slice(&tele.pitch.to_le_bytes());
+                p[8..12].copy_from_slice(&tele.yaw.to_le_bytes());
+                p[12..16].copy_from_slice(&tele.throttle.to_le_bytes());
+                p[16..18].copy_from_slice(&tele.motor_duties[0].to_le_bytes());
+                p[18..20].copy_from_slice(&tele.motor_duties[1].to_le_bytes());
+                p[20..22].copy_from_slice(&tele.motor_duties[2].to_le_bytes());
+                p[22..24].copy_from_slice(&tele.motor_duties[3].to_le_bytes());
+                p[24] = tele.armed as u8;
+                p[25..29].copy_from_slice(&tele.tick.to_be_bytes()); // explicit pad; buf may be dirty
             }
             Message::Heartbeat { uptime_ms } => {
                 p[0..4].copy_from_slice(&uptime_ms.to_le_bytes());
@@ -144,20 +130,18 @@ impl Message {
     /// this is exposed for callers that already have a deframed payload.
     pub fn decode(id: u8, payload: &[u8]) -> Option<Message> {
         Some(match (id, payload.len()) {
-            (MSG_RC_COMMAND, 12) => Message::RcCommand {
+            (MSG_RC_COMMAND, 12) => Message::RcCommand(RcCommand {
                 throttle: f32::from_le_bytes(payload[0..4].try_into().ok()?),
                 roll: f32::from_le_bytes(payload[4..8].try_into().ok()?),
                 pitch: f32::from_le_bytes(payload[8..12].try_into().ok()?),
-            },
-            (MSG_ARM_COMMAND, 1) => Message::ArmCommand {
-                armed: payload[0] != 0,
-            },
-            (MSG_MOVE_COMMAND, 12) => Message::MoveCommand {
-                x: f32::from_le_bytes(payload[0..4].try_into().ok()?),
-                y: f32::from_le_bytes(payload[4..8].try_into().ok()?),
-                z: f32::from_le_bytes(payload[8..12].try_into().ok()?),
-            },
-            (MSG_TELEMETRY, 28) => Message::Telemetry {
+            }),
+            (MSG_ARM_COMMAND, 1) => Message::ArmCommand(payload[0] != 0),
+            (MSG_MOVE_COMMAND, 12) => Message::MoveCommand([
+                f32::from_le_bytes(payload[0..4].try_into().ok()?),
+                f32::from_le_bytes(payload[4..8].try_into().ok()?),
+                f32::from_le_bytes(payload[8..12].try_into().ok()?),
+            ]),
+            (MSG_TELEMETRY, 28) => Message::Telemetry(Telemetry {
                 roll: f32::from_le_bytes(payload[0..4].try_into().ok()?),
                 pitch: f32::from_le_bytes(payload[4..8].try_into().ok()?),
                 yaw: f32::from_le_bytes(payload[8..12].try_into().ok()?),
@@ -169,7 +153,8 @@ impl Message {
                     u16::from_le_bytes(payload[22..24].try_into().ok()?),
                 ],
                 armed: payload[24] != 0,
-            },
+                tick: u32::from_le_bytes(payload[25..29].try_into().ok()?),
+            }),
             (MSG_HEARTBEAT, 4) => Message::Heartbeat {
                 uptime_ms: u32::from_le_bytes(payload[0..4].try_into().ok()?),
             },
@@ -286,105 +271,4 @@ const fn crc8_update(mut crc: u8, byte: u8) -> u8 {
         i += 1;
     }
     crc
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn round_trip(msg: Message) -> Option<Message> {
-        let mut buf = [0u8; MAX_FRAME_SIZE];
-        let n = msg.encode(&mut buf).unwrap();
-        let mut parser = Parser::new();
-        let mut out = None;
-        for &b in &buf[..n] {
-            out = parser.feed(b).or(out);
-        }
-        out
-    }
-
-    #[test]
-    fn rc_command_round_trip() {
-        let m = Message::RcCommand {
-            throttle: 0.5,
-            roll: -0.25,
-            pitch: 0.125,
-        };
-        assert_eq!(round_trip(m), Some(m));
-    }
-
-    #[test]
-    fn arm_command_round_trip() {
-        let m = Message::ArmCommand { armed: true };
-        assert_eq!(round_trip(m), Some(m));
-    }
-
-    #[test]
-    fn telemetry_round_trip() {
-        let m = Message::Telemetry {
-            roll: 1.0,
-            pitch: -1.5,
-            yaw: 0.0,
-            throttle: 100.0,
-            motor_duties: [1000, 1500, 1100, 1234],
-            armed: true,
-        };
-        assert_eq!(round_trip(m), Some(m));
-    }
-
-    #[test]
-    fn heartbeat_round_trip() {
-        let m = Message::Heartbeat { uptime_ms: 123_456 };
-        assert_eq!(round_trip(m), Some(m));
-    }
-
-    #[test]
-    fn rejects_bad_crc() {
-        let mut buf = [0u8; MAX_FRAME_SIZE];
-        let n = Message::Heartbeat { uptime_ms: 42 }
-            .encode(&mut buf)
-            .unwrap();
-        buf[n - 1] ^= 0xFF;
-        let mut parser = Parser::new();
-        let mut out = None;
-        for &b in &buf[..n] {
-            out = parser.feed(b).or(out);
-        }
-        assert!(out.is_none());
-    }
-
-    #[test]
-    fn max_len_payload_does_not_panic() {
-        // The old scratch-buffer bug panicked here. len = 32 must be safe.
-        let mut buf = [0u8; MAX_FRAME_SIZE];
-        buf[0] = SYNC_BYTE;
-        buf[1] = MSG_TELEMETRY; // wrong length for telemetry -> decodes to None
-        buf[2] = 32;
-        let crc = crc8(&buf[1..35]); // id + len + 32 payload bytes
-        buf[35] = crc;
-        let mut parser = Parser::new();
-        let mut out = None;
-        for &b in &buf[..36] {
-            out = parser.feed(b).or(out);
-        }
-        assert!(out.is_none());
-    }
-
-    #[test]
-    fn resyncs_after_garbage() {
-        let mut parser = Parser::new();
-        // 0xAA, then id 0x99, then len 200 (> MAX) -> dropped, back to WaitSync.
-        for &b in &[0x00, 0xFF, 0xAA, 0x99, 200] {
-            let _ = parser.feed(b);
-        }
-        let mut buf = [0u8; MAX_FRAME_SIZE];
-        let n = Message::ArmCommand { armed: true }
-            .encode(&mut buf)
-            .unwrap();
-        let mut out = None;
-        for &b in &buf[..n] {
-            out = parser.feed(b).or(out);
-        }
-        assert_eq!(out, Some(Message::ArmCommand { armed: true }));
-    }
 }

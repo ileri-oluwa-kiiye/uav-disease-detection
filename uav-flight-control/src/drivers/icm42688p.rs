@@ -6,7 +6,7 @@
 use embedded_hal::blocking::spi::Transfer;
 use embedded_hal::blocking::spi::Write;
 use embedded_hal::digital::v2::OutputPin;
-
+use micromath::F32Ext;
 // ---- WHO_AM_I ----
 const WHO_AM_I: u8 = 0x75;
 const WHO_AM_I_VALUE: u8 = 0x47;
@@ -113,6 +113,7 @@ pub enum Error<SpiE, PinE> {
     Spi(SpiE),
     Pin(PinE),
     WhoAmI(u8),
+    MotionDetected(f32),
 }
 
 /// ICM-42688-P driver
@@ -121,6 +122,7 @@ pub struct Icm42688p<SPI, CS> {
     cs: CS,
     gyro_range: GyroRange,
     accel_range: AccelRange,
+    gyro_bias: [f32; 3],
 }
 
 impl<SPI, CS, SpiE, PinE> Icm42688p<SPI, CS>
@@ -135,6 +137,7 @@ where
             cs,
             gyro_range: GyroRange::Dps2000,
             accel_range: AccelRange::G16,
+            gyro_bias: [0.0; 3],
         }
     }
 
@@ -218,9 +221,9 @@ where
             accel_x: raw.accel_x as f32 / accel_sens,
             accel_y: raw.accel_y as f32 / accel_sens,
             accel_z: raw.accel_z as f32 / accel_sens,
-            gyro_x: raw.gyro_x as f32 / gyro_sens,
-            gyro_y: raw.gyro_y as f32 / gyro_sens,
-            gyro_z: raw.gyro_z as f32 / gyro_sens,
+            gyro_x: raw.gyro_x as f32 / gyro_sens - self.gyro_bias[0],
+            gyro_y: raw.gyro_y as f32 / gyro_sens - self.gyro_bias[1],
+            gyro_z: raw.gyro_z as f32 / gyro_sens - self.gyro_bias[2],
             temp_c: (raw.temp_raw as f32 / 132.48) + 25.0,
         })
     }
@@ -251,6 +254,61 @@ where
         Ok(())
     }
 
+    /// Average `samples` stationary gyro readings and store the result as a
+    /// zero-rate bias. MUST be called with the craft completely still.
+    /// Returns the measured bias, or NotStationary if the craft moved.
+    pub fn calibrate_gyro(&mut self, samples: u16) -> Result<[f32; 3], Error<SpiE, PinE>> {
+        const MAX_STD_DPS: f32 = 2.0; // per-axis std-dev gate; loosen if your bench trips it
+
+        self.gyro_bias = [0.0; 3]; // measure raw rate
+
+        // Discard ~250 ms of post-init settling before measuring — the sensor
+        // is noisier right after reset/power-on and can throw transients.
+        for _ in 0..250 {
+            let mut tries = 0u32;
+            while !self.data_ready()? {
+                tries += 1;
+                if tries > 100_000 {
+                    break;
+                }
+            }
+            let _ = self.read_scaled()?;
+        }
+
+        // Accumulate sum and sum-of-squares for mean + std-dev.
+        let mut sum = [0.0f32; 3];
+        let mut sum_sq = [0.0f32; 3];
+        for _ in 0..samples {
+            let mut tries = 0u32;
+            while !self.data_ready()? {
+                tries += 1;
+                if tries > 100_000 {
+                    break;
+                }
+            }
+            let r = self.read_scaled()?;
+            let g = [r.gyro_x, r.gyro_y, r.gyro_z];
+            for i in 0..3 {
+                sum[i] += g[i];
+                sum_sq[i] += g[i] * g[i];
+            }
+        }
+
+        let n = samples as f32;
+        let mean = [sum[0] / n, sum[1] / n, sum[2] / n];
+
+        // Gate on std-dev (robust to single transients, unlike peak-to-peak).
+        for i in 0..3 {
+            let var = (sum_sq[i] / n) - mean[i] * mean[i]; // E[x²] − E[x]²
+            let std = if var > 0.0 { var.sqrt() } else { 0.0 };
+            if std > MAX_STD_DPS {
+                return Err(Error::MotionDetected(std));
+            }
+        }
+
+        self.gyro_bias = mean;
+        Ok(mean)
+    }
     pub fn release(self) -> (SPI, CS) {
         (self.spi, self.cs)
     }

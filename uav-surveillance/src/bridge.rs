@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use drone_protocol::Message;
+use drone_protocol::{Message, Telemetry};
 
 use crate::comms::Comms;
 use crate::mqtt::client::MqttV3Client;
 
-const BROKER_ADDR: &str = "10.140.8.59:1883";
+const BROKER_ADDR: &str = "10.46.15.59:1883";
 const TOPIC_CONTROL: &str = "drone/control";
 const TOPIC_GOTO: &str = "drone/goto";
 const TOPIC_TELEMETRY: &str = "drone/telemetry";
@@ -90,9 +90,7 @@ fn control_loop(comms: Comms, armed: Arc<AtomicBool>) {
                     }
                 }
                 Ok(Some((topic, payload))) if topic == TOPIC_GOTO => {
-                    if let Some([x, y, z]) = parse_xyz(payload) {
-                        comms.send(Message::MoveCommand { x, y, z });
-                    }
+                    parse_xyz(payload).map(|mov| comms.send(Message::MoveCommand(mov)));
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -190,15 +188,16 @@ fn after_key<'a>(s: &'a str, key: &str) -> Option<&'a str> {
     Some(s[colon..].trim_start())
 }
 
-fn format_telemetry<'a>(buf: &'a mut [u8], t: &crate::comms::Telemetry) -> &'a [u8] {
+fn format_telemetry<'a>(buf: &'a mut [u8], t: &Telemetry) -> &'a [u8] {
     use std::io::Write;
     let mut w = std::io::Cursor::new(buf);
     let _ = write!(
         w,
-        "{{\"attitude\":{{\"roll\":{:.2},\"pitch\":{:.2},\"yaw\":{:.2}}},\"motors\":[{},{},{},{}],\"armed\":{},\"tick\":0}}",
+        "{{\"attitude\":{{\"roll\":{:.2},\"pitch\":{:.2},\"yaw\":{:.2}}},\"motors\":[{},{},{},{}],\"armed\":{},\"tick\"{}}}",
         t.roll, t.pitch, t.yaw,
         t.motor_duties[0], t.motor_duties[1], t.motor_duties[2], t.motor_duties[3],
         t.armed,
+        t.tick
     );
     let n = w.position() as usize;
     &w.into_inner()[..n]
