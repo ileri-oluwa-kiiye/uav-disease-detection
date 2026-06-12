@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use drone_protocol::{Message, Telemetry};
+use drone_protocol::Telemetry;
 
 use crate::comms::Comms;
 use crate::mqtt::client::MqttV3Client;
@@ -45,7 +45,7 @@ fn control_loop(comms: Comms, armed: Arc<AtomicBool>) {
             Ok(c) => c,
             Err(e) => {
                 log::error!("control connect failed: {e:?}");
-                thread::sleep(Duration::from_secs(1));
+                thread::sleep(Duration::from_secs(5));
                 continue;
             }
         };
@@ -91,7 +91,7 @@ fn telemetry_loop(comms: Comms) {
             }
             Err(e) => {
                 log::error!("telemetry connect failed: {e:?}");
-                thread::sleep(Duration::from_secs(1));
+                thread::sleep(Duration::from_secs(5));
                 continue;
             }
         };

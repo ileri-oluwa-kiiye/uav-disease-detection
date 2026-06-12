@@ -7,6 +7,7 @@ use embedded_hal::blocking::spi::Transfer;
 use embedded_hal::blocking::spi::Write;
 use embedded_hal::digital::v2::OutputPin;
 use micromath::F32Ext;
+
 // ---- WHO_AM_I ----
 const WHO_AM_I: u8 = 0x75;
 const WHO_AM_I_VALUE: u8 = 0x47;
@@ -226,7 +227,7 @@ where
     /// Accel and gyro share the same axis triad on this part, so one sign set
     /// covers both. VERIFY ON BENCH: tilt right -> telemetry roll must go +.
     /// Flip the offending entry here (and ONLY here) if an axis reads inverted.
-    const AXIS_SIGN_X: f32 = 1.0; // roll axis
+    const AXIS_SIGN_X: f32 = -1.0; // roll axis
     const AXIS_SIGN_Y: f32 = 1.0; // pitch axis
     const AXIS_SIGN_Z: f32 = 1.0; // yaw axis
 
