@@ -1,7 +1,6 @@
 export interface ControlState {
     armed: boolean;
     throttle: number;
-    position: { x: number; y: number; z: number };
     orientation: { roll: number; pitch: number; yaw: number };
     tick: number;
 }
@@ -29,7 +28,5 @@ export interface PredictionsResponse {
 }
 
 export type Tab = "dashboard" | "map" | "history";
-
-export type ManualCommand = "forward" | "backward" | "left" | "right";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected";

@@ -21,6 +21,12 @@ const REG_ACCEL_CONFIG0: u8 = 0x50;
 const REG_GYRO_ACCEL_CONFIG0: u8 = 0x52;
 const REG_BANK_SEL: u8 = 0x76;
 
+/// Accel + gyro UI filter bandwidth, packed as (accel << 4) | gyro.
+/// Each nibble is a fraction of ODR per DS-000347 Table 14-9.
+/// 0x1 = ODR/10. At 1 kHz ODR that's ~100 Hz — tight enough to cut frame
+/// vibration, wide enough to preserve the airframe's rate dynamics.
+const GYRO_ACCEL_FILTER_BW: u8 = 0x11;
+
 // SPI read bit
 const SPI_READ: u8 = 0x80;
 
@@ -165,8 +171,8 @@ where
         // Configure accel: 16g, 1kHz ODR
         self.set_accel_config(AccelRange::G16, Odr::Hz1000)?;
 
-        // Filter bandwidth ODR/4
-        self.write_reg(REG_GYRO_ACCEL_CONFIG0, 0x44)?;
+        // Filter bandwidth ODR/10 (~100 Hz at 1 kHz ODR)
+        self.write_reg(REG_GYRO_ACCEL_CONFIG0, GYRO_ACCEL_FILTER_BW)?;
 
         // Power on gyro + accel in low-noise mode
         self.write_reg(REG_PWR_MGMT0, 0x0F)?;
@@ -211,6 +217,19 @@ where
         })
     }
 
+    /// Body-frame axis signs. The ICM-42688-P is mounted at some orientation
+    /// relative to the airframe; these map the chip's raw axes to the flight
+    /// convention used everywhere downstream:
+    ///   +roll  = right-side-down (right wing drops)
+    ///   +pitch = nose-up
+    ///   +yaw   = nose-right (clockwise viewed from above)
+    /// Accel and gyro share the same axis triad on this part, so one sign set
+    /// covers both. VERIFY ON BENCH: tilt right -> telemetry roll must go +.
+    /// Flip the offending entry here (and ONLY here) if an axis reads inverted.
+    const AXIS_SIGN_X: f32 = 1.0; // roll axis
+    const AXIS_SIGN_Y: f32 = 1.0; // pitch axis
+    const AXIS_SIGN_Z: f32 = 1.0; // yaw axis
+
     /// Read scaled data in physical units
     pub fn read_scaled(&mut self) -> Result<ScaledReading, Error<SpiE, PinE>> {
         let raw = self.read_raw()?;
@@ -218,12 +237,12 @@ where
         let gyro_sens = self.gyro_range.sensitivity();
 
         Ok(ScaledReading {
-            accel_x: raw.accel_x as f32 / accel_sens,
-            accel_y: raw.accel_y as f32 / accel_sens,
-            accel_z: raw.accel_z as f32 / accel_sens,
-            gyro_x: raw.gyro_x as f32 / gyro_sens - self.gyro_bias[0],
-            gyro_y: raw.gyro_y as f32 / gyro_sens - self.gyro_bias[1],
-            gyro_z: raw.gyro_z as f32 / gyro_sens - self.gyro_bias[2],
+            accel_x: Self::AXIS_SIGN_X * (raw.accel_x as f32 / accel_sens),
+            accel_y: Self::AXIS_SIGN_Y * (raw.accel_y as f32 / accel_sens),
+            accel_z: Self::AXIS_SIGN_Z * (raw.accel_z as f32 / accel_sens),
+            gyro_x: Self::AXIS_SIGN_X * (raw.gyro_x as f32 / gyro_sens) - self.gyro_bias[0],
+            gyro_y: Self::AXIS_SIGN_Y * (raw.gyro_y as f32 / gyro_sens) - self.gyro_bias[1],
+            gyro_z: Self::AXIS_SIGN_Z * (raw.gyro_z as f32 / gyro_sens) - self.gyro_bias[2],
             temp_c: (raw.temp_raw as f32 / 132.48) + 25.0,
         })
     }

@@ -76,27 +76,21 @@ impl Motors {
         self.set_throttle::<MOTOR_RR>(val[MOTOR_RR]);
     }
 
-    /// Apply mixer output from PID controller.
+    /// Apply mixer output from the rate PID. Inputs are *corrections*, not
+    /// measurements: a positive measured roll produces a NEGATIVE roll
+    /// correction (error = setpoint - measurement), and that negative value
+    /// must raise the right motors to push back. So right motors take `-roll`,
+    /// left motors take `+roll`. Same logic for pitch (rear takes `-pitch`).
     ///
-    /// - `base_throttle`: overall throttle (0.0 - 1.0) (from RC or altitude hold)
-    /// - `roll`: roll correction from PID (positive = increase right motors)
-    /// - `pitch`: pitch correction from PID (positive = increase rear motors)
-    /// - `yaw`: yaw correction from PID (positive = increase CW motors)
+    /// X-configuration:
+    ///   - FL(CW)  : +roll +pitch +yaw
+    ///   - FR(CCW) : -roll +pitch -yaw
+    ///   - RL(CCW) : +roll -pitch -yaw
+    ///   - RR(CW)  : -roll -pitch +yaw
     ///
-    /// Quadcopter "X" configuration:
-    /// ```text
-    ///     Front
-    ///  FL(1)  FR(2)
-    ///     \  /
-    ///      \/
-    ///      /\
-    ///     /  \
-    ///  RL(3)  RR(4)
-    ///      Rear
-    ///
-    ///  FL & RR spin clockwise (CW)
-    ///  FR & RL spin counter-clockwise (CCW)
-    /// ```
+    /// With +roll = right-wing-down measured, a right roll yields roll<0 here,
+    /// so FR/RR (the `-roll` motors) spin UP and FL/RL spin DOWN: the craft
+    /// rights itself. Verify on the bench before flying.
     pub fn mix(&mut self, base_throttle: f32, roll: f32, pitch: f32, yaw: f32) {
         if !self.armed {
             self.throttle = [0.0; 4];
@@ -104,12 +98,6 @@ impl Motors {
         }
 
         let base = math::clamp(base_throttle, 0.0, 1.0);
-
-        // X-configuration mixing
-        // FL (CW):  +roll, +pitch, +yaw
-        // FR (CCW): -roll, +pitch, -yaw
-        // RL (CCW): +roll, -pitch, -yaw
-        // RR (CW):  -roll, -pitch, +yaw
         self.set_throttle::<MOTOR_FL>(base + roll + pitch + yaw);
         self.set_throttle::<MOTOR_FR>(base - roll + pitch - yaw);
         self.set_throttle::<MOTOR_RL>(base + roll - pitch - yaw);

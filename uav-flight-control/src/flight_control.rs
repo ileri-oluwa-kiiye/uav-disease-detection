@@ -11,9 +11,9 @@
 //!     7. Write PWM duty cycles
 //!
 //!   Main loop:
-//!     - Reads latest telemetry via snapshot()
-//!     - Sets desired angles and throttle via set_setpoints()
-//!     - Handles arming via arm() / disarm()
+//!     - Reads latest telemetry via the shared snapshot
+//!     - Sets desired angles and throttle via shared commands
+//!     - Handles arming
 
 use stm32h7xx_hal::{pac::TIM2, timer::Timer};
 
@@ -21,18 +21,17 @@ use crate::{
     board::{self},
     drivers::{
         ahrs::{Attitude, MadgwickFilter},
+        lowpass::GyroLowPass,
         motors::Motors,
         pid::{FlightPidOutput, FlightPids, PidConfig, PidGains},
     },
-    position::{PositionConfig, PositionController, PositionEstimate},
 };
 
-#[derive(Clone, Copy, PartialEq, Default)]
-pub enum FlightMode {
-    #[default]
-    Manual,
-    Position,
-}
+/// Rate-loop gyro low-pass cutoff. Below the dominant prop/frame vibration
+/// band, above the airframe's real control dynamics. Lower if duties still
+/// twitch at hover; raise if the craft feels sluggish or sloppy.
+const GYRO_LPF_HZ: f32 = 80.0;
+const RATE_LOOP_HZ: f32 = 1000.0;
 
 /// Telemetry snapshot
 #[derive(Clone, Copy, Default)]
@@ -42,6 +41,7 @@ pub struct Telemetry {
     pub accl: [f32; 3],
     pub pid_output: FlightPidOutput,
     pub motor_duties: [u16; 4],
+    pub throttle: f32,
     pub tick: u32,
     pub armed: bool,
 }
@@ -52,9 +52,9 @@ pub struct Commands {
     pub desired_angles: [f32; 3],
     pub base_throttle: f32,
     pub arm_request: bool,
+    /// Monotonic microsecond timestamp of the last valid RC frame. The flight
+    /// loop uses this for the link-loss failsafe.
     pub last_rc_us: u64,
-    pub manual_override: bool,
-    pub move_request: Option<[f32; 3]>,
 }
 
 /// Everything the ISR needs
@@ -69,6 +69,7 @@ pub struct FlightControl {
 
     // Filters & controllers
     pub ahrs: MadgwickFilter,
+    pub gyro_lpf: GyroLowPass,
     pub level_trim: [f32; 2],
     pub rate_pids: FlightPids,
     pub angle_pids: FlightPids,
@@ -76,15 +77,8 @@ pub struct FlightControl {
 
     // State
     pub desired_rates: [f32; 3],
-    pub tick_count: u32,
-
-    // control
-    pub mode: FlightMode,
-    pub position_ctrl: PositionController,
-    pub estimator: PositionEstimate,
-    pub nav_target: [f32; 3],
-    pub nav_yaw: f32,
     pub base_throttle: f32,
+    pub tick_count: u32,
 }
 
 impl FlightControl {
@@ -108,18 +102,14 @@ impl FlightControl {
             ch3,
             ch4,
             ahrs: MadgwickFilter::new(1000.0, 0.033),
+            gyro_lpf: GyroLowPass::new(GYRO_LPF_HZ, RATE_LOOP_HZ),
             level_trim: [0.0; 2],
             rate_pids: FlightPids::new(default_rate_config(), default_rate_yaw_config()),
             angle_pids: FlightPids::new(default_angle_config(), default_angle_yaw_config()),
             motors: Motors::new(max_duty),
             desired_rates: [0.0; 3],
-            tick_count: 0,
-            mode: FlightMode::Manual,
-            position_ctrl: PositionController::new(default_position_config()),
-            estimator: PositionEstimate::default(),
-            nav_target: [0.0; 3],
-            nav_yaw: 0.0,
             base_throttle: 0.0,
+            tick_count: 0,
         }
     }
 
@@ -127,7 +117,6 @@ impl FlightControl {
     /// the residual roll/pitch as a level-trim offset. Call once after the gyro
     /// is calibrated and before flight. ~1 ms per iteration at 240 MHz.
     pub fn calibrate_level(&mut self, settle_iters: u32, trim_samples: u32) {
-        // 1. Let the Madgwick quaternion converge from identity to true gravity.
         for _ in 0..settle_iters {
             if let Ok(r) = self.imu.read_scaled() {
                 self.ahrs.update(
@@ -137,7 +126,6 @@ impl FlightControl {
             cortex_m::asm::delay(240_000);
         }
 
-        // 2. Average the converged attitude as the level reference.
         let mut sum_r = 0.0f32;
         let mut sum_p = 0.0f32;
         for _ in 0..trim_samples {
@@ -167,13 +155,16 @@ impl FlightControl {
     }
 }
 
-/// PID configuration defaults — tune these with motors running
+/// PID configuration defaults — tune these with motors running.
+/// Note: rate-loop kd starts at 0.0 for roll/pitch. A nonzero derivative on a
+/// vibration-contaminated gyro signal injects motor noise directly. Reintroduce
+/// kd only after the craft hovers cleanly and the gyro is well filtered.
 pub fn default_rate_config() -> PidConfig {
     PidConfig {
         gains: PidGains {
             kp: 0.5,
             ki: 0.1,
-            kd: 0.01,
+            kd: 0.0,
         },
         integral_limit: 50.0,
         output_limit: 0.3,
@@ -213,18 +204,5 @@ pub fn default_angle_yaw_config() -> PidConfig {
         },
         integral_limit: 20.0,
         output_limit: 200.0,
-    }
-}
-
-pub fn default_position_config() -> PositionConfig {
-    PositionConfig {
-        kp_xy: 1.0,
-        kd_xy: 2.0,
-        kp_z: 0.10,
-        kd_z: 0.05,
-        max_tilt_deg: 15.0,
-        hover_throttle: 0.5,
-        arrive_radius_m: 0.5,
-        arrive_speed_mps: 0.3,
     }
 }

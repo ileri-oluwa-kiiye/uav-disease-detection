@@ -12,7 +12,6 @@ export const telemetry = writable<TelemetryData>({
 });
 
 export const TOPICS = {
-    GOTO: "drone/goto",
     CONTROL: "drone/control",
     TELEMETRY: "drone/telemetry",
 } as const;

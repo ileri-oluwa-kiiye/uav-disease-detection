@@ -123,7 +123,6 @@ fn rx_loop(
                 if let Some(msg) = parser.feed(byte[0]) {
                     last_rx_ms.store(now_ms(), Ordering::Relaxed);
                     if let Message::Telemetry(tele) = msg {
-                        println!("got telemetry");
                         *telemetry.lock().unwrap() = Some(tele);
                     }
                 }

@@ -5,7 +5,6 @@ mod board;
 mod drivers;
 mod flight_control;
 mod math;
-mod position;
 
 use defmt_rtt as _;
 use panic_probe as _;
@@ -28,10 +27,12 @@ mod app {
             icm42688p::Icm42688p,
             motors::{MOTOR_FL, MOTOR_FR, MOTOR_RL, MOTOR_RR},
         },
-        flight_control::{Commands, FlightControl, FlightMode, Telemetry},
+        flight_control::{Commands, FlightControl, Telemetry},
     };
 
     stm32_tim5_monotonic!(Mono, 1_000_000); // 1 MHz -> microsecond ticks
+
+    const RC_TIMEOUT_US: u64 = 500_000;
 
     #[shared]
     struct Shared {
@@ -99,13 +100,18 @@ mod app {
         let mut imu = Icm42688p::new(spi2, cs);
         imu.init().expect("IMU init failed");
 
-        // Gyro bias — craft MUST be stationary and level at power-up.
-        match imu.calibrate_gyro(2000) {
-            Ok(bias) => defmt::info!("gyro bias (dps): {}", bias),
-            Err(crate::drivers::icm42688p::Error::MotionDetected(spread)) => {
-                defmt::warn!("gyro cal spread {} dps too high", spread)
+        loop {
+            // Gyro bias — craft MUST be stationary and level at power-up.
+            match imu.calibrate_gyro(2000) {
+                Ok(bias) => {
+                    defmt::info!("gyro bias (dps): {}", bias);
+                    break;
+                }
+                Err(crate::drivers::icm42688p::Error::MotionDetected(spread)) => {
+                    defmt::warn!("gyro cal spread {} dps too high", spread)
+                }
+                Err(_) => defmt::warn!("gyro cal: sensor error"),
             }
-            Err(_) => defmt::warn!("gyro cal: sensor error"),
         }
 
         // PWM for motors (TIM3, 50Hz)
@@ -196,78 +202,67 @@ mod app {
         fc.timer.clear_irq();
 
         // 2. Read commands (short lock)
-        let cmds = ctx.shared.commands.lock(|c| {
-            let snap = *c;
-            c.move_request = None;
-            c.manual_override = false;
-            snap
-        });
+        let cmds = ctx.shared.commands.lock(|c| *c);
 
-        if cmds.arm_request {
+        // 3. Link-loss failsafe: if RC frames have gone stale, treat as disarm
+        // and hold level setpoints. last_rc_us == 0 means "no frame ever yet",
+        // which also fails safe (stays disarmed until the first real command).
+        let now_us = Mono::now().ticks();
+        let link_alive =
+            cmds.last_rc_us != 0 && now_us.saturating_sub(cmds.last_rc_us) < RC_TIMEOUT_US;
+
+        let (arm_request, desired_angles, base_throttle) = if link_alive {
+            (cmds.arm_request, cmds.desired_angles, cmds.base_throttle)
+        } else {
+            (false, [0.0; 3], 0.0)
+        };
+
+        // 4. Arm / disarm
+        if arm_request {
             fc.motors.arm();
         } else {
             fc.motors.disarm();
             fc.rate_pids.reset();
             fc.angle_pids.reset();
-            fc.mode = FlightMode::Manual;
+            fc.gyro_lpf.reset();
         }
 
-        if let Some(delta) = cmds.move_request {
-            let p = fc.estimator.pos;
-            fc.nav_target = [p[0] + delta[0], p[1] + delta[1], p[2] + delta[2]];
-            fc.nav_yaw = fc.ahrs.attitude().yaw; // hold current heading
-            fc.mode = FlightMode::Position;
-        }
-
-        // 4. Read IMU
-        let reading = match fc.imu.read_scaled() {
+        // 5. Read IMU
+        let read = match fc.imu.read_scaled() {
             Ok(r) => r,
             Err(_) => return,
         };
 
-        // 5. AHRS update
+        // 6. AHRS update
         fc.ahrs.update(
-            reading.gyro_x,
-            reading.gyro_y,
-            reading.gyro_z,
-            reading.accel_x,
-            reading.accel_y,
-            reading.accel_z,
+            read.gyro_x,
+            read.gyro_y,
+            read.gyro_z,
+            read.accel_x,
+            read.accel_y,
+            read.accel_z,
         );
 
         fc.tick_count = fc.tick_count.wrapping_add(1);
+        fc.base_throttle = base_throttle;
 
-        // 6. Outer loop at 250Hz
+        // 7. Software low-pass on gyro, feeding ONLY the rate loop. This is the
+        // signal the derivative term sees, so it must be clean.
+        let gyro_filt = fc.gyro_lpf.update([read.gyro_x, read.gyro_y, read.gyro_z]);
+
+        // 8. Outer loop at 250Hz: angle -> desired rate
         if fc.tick_count % 4 == 0 {
             let att = fc.attitude_trimmed();
-
-            let (target_angles, base_throttle) = match fc.mode {
-                FlightMode::Manual => (cmds.desired_angles, cmds.base_throttle),
-                FlightMode::Position => {
-                    let nav = fc
-                        .position_ctrl
-                        .update(fc.nav_target, &fc.estimator, att.yaw);
-                    ([nav.roll, nav.pitch, fc.nav_yaw], nav.throttle)
-                }
-            };
-
-            fc.base_throttle = base_throttle;
-
             let out = fc
                 .angle_pids
-                .update(target_angles, [att.roll, att.pitch, att.yaw], 0.004);
-
+                .update(desired_angles, [att.roll, att.pitch, att.yaw], 0.004);
             fc.desired_rates = [out.roll.output, out.pitch.output, out.yaw.output];
         }
 
-        // 7. Inner loop at 1kHz
-        let pid_out = fc.rate_pids.update(
-            fc.desired_rates,
-            [reading.gyro_x, reading.gyro_y, reading.gyro_z],
-            0.001,
-        );
+        // 9. Inner loop at 1kHz: desired rate -> correction
+        let pid_out = fc.rate_pids.update(fc.desired_rates, gyro_filt, 0.001);
 
-        // 8. Mix Motors
+        // 10. Mix motors
         fc.motors.mix(
             fc.base_throttle,
             pid_out.roll.output,
@@ -275,18 +270,21 @@ mod app {
             pid_out.yaw.output,
         );
 
-        // 9. Write PWM
+        // 11. Write PWM
         let duties = fc.motors.duties();
         fc.ch1.set_duty(duties[MOTOR_FL]);
         fc.ch2.set_duty(duties[MOTOR_FR]);
         fc.ch3.set_duty(duties[MOTOR_RL]);
         fc.ch4.set_duty(duties[MOTOR_RR]);
 
-        // 10. Update telemetry (short lock)
+        // 12. Update telemetry (short lock)
         ctx.shared.telemetry.lock(|t| {
             t.attitude = fc.attitude_trimmed();
-            t.gyro = [reading.gyro_x, reading.gyro_y, reading.gyro_z];
+            t.gyro = gyro_filt;
+            t.accl = [read.accel_x, read.accel_y, read.accel_z];
+            t.pid_output = pid_out;
             t.motor_duties = duties;
+            t.throttle = fc.base_throttle;
             t.tick = fc.tick_count;
             t.armed = fc.motors.is_armed();
         });
@@ -314,10 +312,8 @@ mod app {
                     cmds.base_throttle = throttle;
                     cmds.desired_angles[0] = roll;
                     cmds.desired_angles[1] = pitch;
-                    cmds.manual_override = true;
                 }
                 Message::ArmCommand(armed) => cmds.arm_request = armed,
-                Message::MoveCommand(mov) => cmds.move_request = Some(mov),
                 _ => {}
             }
         });
@@ -333,26 +329,25 @@ mod app {
         loop {
             counter = counter.wrapping_add(1);
 
-            // Send telemetry at ~10Hz
             if counter % 500_000 == 0 {
                 ctx.local.led.toggle();
 
                 let t = ctx.shared.telemetry.lock(|t| *t);
 
                 defmt::info!(
-                    "is_armed: {}, r:{}, p:{}, motors: {}",
+                    "armed:{} r:{} p:{} thr:{} motors:{}",
                     t.armed,
                     t.attitude.roll,
                     t.attitude.pitch,
+                    t.throttle,
                     t.motor_duties
                 );
 
-                // UART telemetry to ESP32
                 let len = Message::Telemetry(drone_protocol::Telemetry {
                     roll: t.attitude.roll,
                     pitch: t.attitude.pitch,
                     yaw: t.attitude.yaw,
-                    throttle: 0.0,
+                    throttle: t.throttle,
                     motor_duties: t.motor_duties,
                     armed: t.armed,
                     tick: t.tick,
@@ -364,7 +359,7 @@ mod app {
                     for &byte in &tx_buf[..len] {
                         let _ = nb::block!(tx.write(byte));
                     }
-                })
+                });
             }
         }
     }

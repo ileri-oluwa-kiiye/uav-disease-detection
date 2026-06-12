@@ -10,10 +10,7 @@ use crate::mqtt::client::MqttV3Client;
 
 const BROKER_ADDR: &str = "10.46.15.59:1883";
 const TOPIC_CONTROL: &str = "drone/control";
-const TOPIC_GOTO: &str = "drone/goto";
 const TOPIC_TELEMETRY: &str = "drone/telemetry";
-const RC_HZ: u64 = 50;
-const KEEPALIVE_HZ: u64 = 50;
 
 #[derive(Clone, Copy, Default)]
 struct Control {
@@ -26,19 +23,6 @@ struct Control {
 pub fn start(comms: Comms) {
     let armed = Arc::new(AtomicBool::new(false));
     let control_comms = comms.clone();
-
-    let uart_comms = comms.clone();
-    let uart_armed = armed.clone();
-    //thread::Builder::new()
-    //    .name("uart-keepalive".into())
-    //    .stack_size(2048)
-    //    .spawn(move || {
-    //        let armed = uart_armed.load(Ordering::Relaxed);
-    //        uart_comms.send_arm(armed);
-    //        println!("uart arm command sent: {armed}");
-    //        thread::sleep(Duration::from_millis(1000 / KEEPALIVE_HZ))
-    //    })
-    //    .unwrap();
 
     thread::Builder::new()
         .name("mqtt-control".into())
@@ -61,14 +45,13 @@ fn control_loop(comms: Comms, armed: Arc<AtomicBool>) {
             Ok(c) => c,
             Err(e) => {
                 log::error!("control connect failed: {e:?}");
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(1));
                 continue;
             }
         };
 
         if client.connect("uav-esp32-ctl", None, None, 60).is_err()
             || client.subscribe(TOPIC_CONTROL, 0).is_err()
-            || client.subscribe(TOPIC_GOTO, 0).is_err()
         {
             thread::sleep(Duration::from_secs(5));
             continue;
@@ -80,7 +63,6 @@ fn control_loop(comms: Comms, armed: Arc<AtomicBool>) {
         let mut payload_buf = [0u8; 512];
 
         loop {
-            // read_message blocks up to the socket timeout (10s), then returns.
             match client.read_message(&mut topic_buf, &mut payload_buf) {
                 Ok(Some((topic, payload))) if topic == TOPIC_CONTROL => {
                     if let Some(c) = parse_control(payload) {
@@ -88,9 +70,6 @@ fn control_loop(comms: Comms, armed: Arc<AtomicBool>) {
                         comms.send_arm(c.armed);
                         comms.send_rc(c.throttle, c.roll, c.pitch);
                     }
-                }
-                Ok(Some((topic, payload))) if topic == TOPIC_GOTO => {
-                    parse_xyz(payload).map(|mov| comms.send(Message::MoveCommand(mov)));
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -112,7 +91,7 @@ fn telemetry_loop(comms: Comms) {
             }
             Err(e) => {
                 log::error!("telemetry connect failed: {e:?}");
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(1));
                 continue;
             }
         };
@@ -146,15 +125,6 @@ fn parse_control(payload: &[u8]) -> Option<Control> {
         roll: json_num(s, "roll").unwrap_or(0.0),
         pitch: json_num(s, "pitch").unwrap_or(0.0),
     })
-}
-
-fn parse_xyz(payload: &[u8]) -> Option<[f32; 3]> {
-    let s = core::str::from_utf8(payload).ok()?;
-    Some([
-        json_num(s, "x").unwrap_or(0.0),
-        json_num(s, "y").unwrap_or(0.0),
-        json_num(s, "z").unwrap_or(0.0),
-    ])
 }
 
 fn json_bool(s: &str, key: &str) -> Option<bool> {
@@ -193,7 +163,7 @@ fn format_telemetry<'a>(buf: &'a mut [u8], t: &Telemetry) -> &'a [u8] {
     let mut w = std::io::Cursor::new(buf);
     let _ = write!(
         w,
-        "{{\"attitude\":{{\"roll\":{:.2},\"pitch\":{:.2},\"yaw\":{:.2}}},\"motors\":[{},{},{},{}],\"armed\":{},\"tick\"{}}}",
+        "{{\"attitude\":{{\"roll\":{:.2},\"pitch\":{:.2},\"yaw\":{:.2}}},\"motors\":[{},{},{},{}],\"armed\":{},\"tick\":{}}}",
         t.roll, t.pitch, t.yaw,
         t.motor_duties[0], t.motor_duties[1], t.motor_duties[2], t.motor_duties[3],
         t.armed,

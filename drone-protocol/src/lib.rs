@@ -18,7 +18,6 @@ pub const SYNC_BYTE: u8 = 0xAA;
 
 pub const MSG_RC_COMMAND: u8 = 0x01;
 pub const MSG_ARM_COMMAND: u8 = 0x02;
-pub const MSG_MOVE_COMMAND: u8 = 0x03;
 pub const MSG_TELEMETRY: u8 = 0x10;
 pub const MSG_HEARTBEAT: u8 = 0x11;
 
@@ -51,7 +50,6 @@ pub struct Telemetry {
 pub enum Message {
     RcCommand(RcCommand),
     ArmCommand(bool),
-    MoveCommand([f32; 3]),
     Telemetry(Telemetry),
     Heartbeat { uptime_ms: u32 },
 }
@@ -61,7 +59,6 @@ impl Message {
         match self {
             Message::RcCommand { .. } => MSG_RC_COMMAND,
             Message::ArmCommand { .. } => MSG_ARM_COMMAND,
-            Message::MoveCommand { .. } => MSG_MOVE_COMMAND,
             Message::Telemetry { .. } => MSG_TELEMETRY,
             Message::Heartbeat { .. } => MSG_HEARTBEAT,
         }
@@ -71,7 +68,6 @@ impl Message {
         match self {
             Message::RcCommand { .. } => core::mem::size_of::<RcCommand>(),
             Message::ArmCommand { .. } => core::mem::size_of::<bool>(),
-            Message::MoveCommand { .. } => core::mem::size_of::<[f32; 3]>(),
             Message::Telemetry { .. } => core::mem::size_of::<Telemetry>(),
             Message::Heartbeat { .. } => core::mem::size_of::<u32>(),
         }
@@ -98,11 +94,6 @@ impl Message {
                 p[8..12].copy_from_slice(&rc.pitch.to_le_bytes());
             }
             Message::ArmCommand(armed) => p[0] = armed as u8,
-            Message::MoveCommand(mov) => {
-                p[0..4].copy_from_slice(&mov[0].to_le_bytes());
-                p[4..8].copy_from_slice(&mov[1].to_le_bytes());
-                p[8..12].copy_from_slice(&mov[2].to_le_bytes());
-            }
             Message::Telemetry(tele) => {
                 p[0..4].copy_from_slice(&tele.roll.to_le_bytes());
                 p[4..8].copy_from_slice(&tele.pitch.to_le_bytes());
@@ -113,7 +104,7 @@ impl Message {
                 p[20..22].copy_from_slice(&tele.motor_duties[2].to_le_bytes());
                 p[22..24].copy_from_slice(&tele.motor_duties[3].to_le_bytes());
                 p[24] = tele.armed as u8;
-                p[25..29].copy_from_slice(&tele.tick.to_be_bytes()); // explicit pad; buf may be dirty
+                p[25..29].copy_from_slice(&tele.tick.to_le_bytes());
             }
             Message::Heartbeat { uptime_ms } => {
                 p[0..4].copy_from_slice(&uptime_ms.to_le_bytes());
@@ -136,11 +127,6 @@ impl Message {
                 pitch: f32::from_le_bytes(payload[8..12].try_into().ok()?),
             }),
             (MSG_ARM_COMMAND, 1) => Message::ArmCommand(payload[0] != 0),
-            (MSG_MOVE_COMMAND, 12) => Message::MoveCommand([
-                f32::from_le_bytes(payload[0..4].try_into().ok()?),
-                f32::from_le_bytes(payload[4..8].try_into().ok()?),
-                f32::from_le_bytes(payload[8..12].try_into().ok()?),
-            ]),
             (MSG_TELEMETRY, 28) => Message::Telemetry(Telemetry {
                 roll: f32::from_le_bytes(payload[0..4].try_into().ok()?),
                 pitch: f32::from_le_bytes(payload[4..8].try_into().ok()?),
