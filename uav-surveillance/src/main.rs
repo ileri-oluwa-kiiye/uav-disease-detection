@@ -25,15 +25,14 @@ fn main() -> anyhow::Result<()> {
 
     std::thread::sleep(Duration::from_secs(1));
 
-    log::info!("Connecting to WiFi...");
     let (_wifi, ip) = wifi::connect(peripherals.modem, sysloop, nvs)?;
-    //let _server = stream_server::start()?;
-    //log::info!("Open http://{ip}/ in your browser");
+    //  let _server = stream_server::start()?;
+    //  log::info!("Open http://{ip}/ in your browser");
 
     let comms = comms::start(
         peripherals.uart1,
-        peripherals.pins.gpio1, // ESP TX -> STM RX (PA10)
-        peripherals.pins.gpio2, // ESP RX -> STM TX (PA9)
+        peripherals.pins.gpio1, // ESP TX (1) -> STM RX (PA10)
+        peripherals.pins.gpio2, // ESP RX (2) -> STM TX (PA9)
         115_200,
     )?;
 

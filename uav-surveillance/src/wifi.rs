@@ -1,9 +1,10 @@
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, time::Duration};
 
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::modem::Modem,
     nvs::EspDefaultNvsPartition,
+    sys::EspError,
     wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
 
@@ -16,35 +17,29 @@ pub fn connect(
     modem: Modem<'static>,
     sysloop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
-) -> anyhow::Result<(WiFi, Ipv4Addr)> {
+) -> Result<(WiFi, Ipv4Addr), EspError> {
     let mut wifi = BlockingWifi::wrap(EspWifi::new(modem, sysloop.clone(), Some(nvs))?, sysloop)?;
 
     wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: WIFI_SSID.try_into()?,
-        password: WIFI_PASS.try_into()?,
-        auth_method: AuthMethod::None,
+        ssid: WIFI_SSID.try_into().unwrap(),
+        password: WIFI_PASS.try_into().unwrap(),
+        auth_method: AuthMethod::WPA2Personal,
         ..Default::default()
     }))?;
 
     wifi.start()?;
 
-    loop {
-        match wifi.connect() {
-            Ok(()) => {
-                log::info!("WiFi connected");
-                break;
-            }
-            Err(e) => {
-                log::warn!("Connect failed: {:?}, retrying in 1s...", e);
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-        }
+    log::info!("Connecting to WiFi...");
+
+    while let Err(err) = wifi.connect() {
+        log::warn!("Connect failed: {err:?}, retrying in 1s...");
+        std::thread::sleep(Duration::from_secs(1));
     }
 
     wifi.wait_netif_up()?;
-
     let ip = wifi.wifi().sta_netif().get_ip_info()?.ip;
-    log::info!("Connected! IP: {ip}");
+
+    log::info!("WiFi Connected! IP: {ip}");
 
     Ok((wifi, ip))
 }

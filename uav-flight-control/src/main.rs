@@ -100,17 +100,23 @@ mod app {
         let mut imu = Icm42688p::new(spi2, cs);
         imu.init().expect("IMU init failed");
 
-        loop {
+        let mut attempts = 0;
+
+        while attempts < 5 {
             // Gyro bias — craft MUST be stationary and level at power-up.
             match imu.calibrate_gyro(2000) {
                 Ok(bias) => {
-                    defmt::info!("gyro bias (dps): {}", bias);
+                    defmt::info!("gyro bias (dps): {}, tries {}x", bias, attempts + 1);
                     break;
                 }
                 Err(crate::drivers::icm42688p::Error::MotionDetected(spread)) => {
+                    attempts += 1;
                     defmt::warn!("gyro cal spread {} dps too high", spread)
                 }
-                Err(_) => defmt::warn!("gyro cal: sensor error"),
+                Err(_) => {
+                    defmt::warn!("gyro cal: sensor error");
+                    break;
+                }
             }
         }
 
@@ -133,6 +139,8 @@ mod app {
         ch3.enable();
         ch4.enable();
         let max_duty = ch1.get_max_duty() as u16;
+
+        defmt::info!("max duty: {}", max_duty);
 
         // ESC idle = 1000µs of the 20ms (50Hz) frame — the same value Motors emits
         // when disarmed. Write it the instant the outputs go live so the ESCs see a
@@ -200,6 +208,13 @@ mod app {
 
         // 1. Clear interrupt
         fc.timer.clear_irq();
+
+        // fc.tick_count = fc.tick_count.wrapping_add(1);
+        // if fc.tick_count % 4 == 0 {
+        //     if let Ok(raw) = fc.imu.read_scaled() {
+        //         defmt::info!("gyro: [{}, {}, {}]", raw.gyro_x, raw.gyro_y, raw.gyro_z);
+        //     }
+        // }
 
         // 2. Read commands (short lock)
         let cmds = ctx.shared.commands.lock(|c| *c);
@@ -335,12 +350,13 @@ mod app {
                 let t = ctx.shared.telemetry.lock(|t| *t);
 
                 defmt::info!(
-                    "armed:{} r:{} p:{} thr:{} motors:{}",
+                    "armed:{} att:{} pid_r:{} pid_p: {} thr:{} motors:{}",
                     t.armed,
-                    t.attitude.roll,
-                    t.attitude.pitch,
+                    [t.attitude.roll, t.attitude.pitch, t.attitude.yaw],
+                    t.pid_output.roll.output,
+                    t.pid_output.pitch.output,
                     t.throttle,
-                    t.motor_duties
+                    t.motor_duties,
                 );
 
                 let len = Message::Telemetry(drone_protocol::Telemetry {

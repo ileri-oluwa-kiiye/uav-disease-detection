@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -11,6 +11,7 @@ use crate::mqtt::client::MqttV3Client;
 const BROKER_ADDR: &str = "10.46.15.59:1883";
 const TOPIC_CONTROL: &str = "drone/control";
 const TOPIC_TELEMETRY: &str = "drone/telemetry";
+const RC_HZ: u64 = 50;
 
 #[derive(Clone, Copy, Default)]
 struct Control {
@@ -21,13 +22,28 @@ struct Control {
 }
 
 pub fn start(comms: Comms) {
-    let armed = Arc::new(AtomicBool::new(false));
-    let control_comms = comms.clone();
+    let last = Arc::new(Mutex::new(Control::default()));
 
+    let recv_last = last.clone();
     thread::Builder::new()
         .name("mqtt-control".into())
         .stack_size(8192)
-        .spawn(move || control_loop(control_comms, armed))
+        .spawn(move || control_loop(recv_last))
+        .unwrap();
+
+    // Keepalive resender: pushes the latest control to the STM at RC_HZ so the
+    // flight-controller link-loss watchdog stays fed even if MQTT goes quiet
+    // (e.g. the dashboard tab is backgrounded and its timer is throttled).
+    let ka_comms = comms.clone();
+    thread::Builder::new()
+        .name("rc-keepalive".into())
+        .stack_size(4096)
+        .spawn(move || loop {
+            let c = *last.lock().unwrap();
+            ka_comms.send_arm(c.armed);
+            ka_comms.send_rc(c.throttle, c.roll, c.pitch);
+            thread::sleep(Duration::from_millis(1000 / RC_HZ));
+        })
         .unwrap();
 
     thread::Builder::new()
@@ -39,7 +55,7 @@ pub fn start(comms: Comms) {
 
 // MQTT (drone/control) -> STM. Also re-sends the latest control at RC_HZ so the
 // STM's link-loss watchdog stays fed even when the dashboard is idle.
-fn control_loop(comms: Comms, armed: Arc<AtomicBool>) {
+fn control_loop(last: Arc<Mutex<Control>>) {
     loop {
         let mut client = match MqttV3Client::connect_tcp(BROKER_ADDR, Duration::from_secs(10)) {
             Ok(c) => c,
@@ -66,9 +82,7 @@ fn control_loop(comms: Comms, armed: Arc<AtomicBool>) {
             match client.read_message(&mut topic_buf, &mut payload_buf) {
                 Ok(Some((topic, payload))) if topic == TOPIC_CONTROL => {
                     if let Some(c) = parse_control(payload) {
-                        armed.store(c.armed, Ordering::Relaxed);
-                        comms.send_arm(c.armed);
-                        comms.send_rc(c.throttle, c.roll, c.pitch);
+                        *last.lock().unwrap() = c;
                     }
                 }
                 Ok(_) => {}
@@ -95,10 +109,12 @@ fn telemetry_loop(comms: Comms) {
                 continue;
             }
         };
+
         if client.connect("uav-esp32-tel", None, None, 60).is_err() {
             thread::sleep(Duration::from_secs(5));
             continue;
         }
+
         log::info!("telemetry link up");
 
         loop {

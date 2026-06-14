@@ -116,9 +116,16 @@ impl MqttV3Client {
                 self.stream.read_exact(&mut len_bytes)?;
                 let topic_len = read_u16(&len_bytes);
 
+                if remaining < 2 + topic_len || topic_len > topic_buf.len() {
+                    return Err(MqttError::Protocol);
+                }
+
                 self.stream.read_exact(&mut topic_buf[..topic_len])?;
 
                 let payload_len = remaining - 2 - topic_len;
+                if payload_len > payload_buf.len() {
+                    return Err(MqttError::Protocol);
+                }
                 self.stream.read_exact(&mut payload_buf[..payload_len])?;
 
                 let topic = core::str::from_utf8(&topic_buf[..topic_len])

@@ -45,7 +45,7 @@ impl Quaternion {
         // Pitch (rotation around Y axis)
         let sinp = 2.0 * (q0 * q2 - q3 * q1);
         let pitch = if sinp.abs() >= 1.0 {
-            core::f32::consts::FRAC_PI_2.copysign(sinp) // clamp to ±90°
+            core::f32::consts::FRAC_PI_2.copysign(sinp)
         } else {
             math::asinf(sinp)
         };

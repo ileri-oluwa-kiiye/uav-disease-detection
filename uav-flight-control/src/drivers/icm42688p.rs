@@ -1,8 +1,3 @@
-//! ICM-42688-P 6-axis IMU driver over SPI
-//!
-//! Uses embedded-hal 0.2 traits (compatible with stm32h7xx-hal v0.16)
-//! Register map reference: DS-000347 Rev 1.6
-
 use embedded_hal::blocking::spi::Transfer;
 use embedded_hal::blocking::spi::Write;
 use embedded_hal::digital::v2::OutputPin;
@@ -23,13 +18,13 @@ const REG_GYRO_ACCEL_CONFIG0: u8 = 0x52;
 const REG_BANK_SEL: u8 = 0x76;
 
 /// Accel + gyro UI filter bandwidth, packed as (accel << 4) | gyro.
-/// Each nibble is a fraction of ODR per DS-000347 Table 14-9.
-/// 0x1 = ODR/10. At 1 kHz ODR that's ~100 Hz — tight enough to cut frame
-/// vibration, wide enough to preserve the airframe's rate dynamics.
+/// 0x1 = ODR/10. At 1 kHz ODR that's ~100 Hz.
 const GYRO_ACCEL_FILTER_BW: u8 = 0x11;
 
-// SPI read bit
 const SPI_READ: u8 = 0x80;
+
+const ACCEL_SIGN: [f32; 3] = [1.0, -1.0, 1.0];
+const GYRO_SIGN: [f32; 3] = [-1.0, 1.0, 1.0];
 
 /// Gyroscope full-scale range
 #[derive(Clone, Copy)]
@@ -90,7 +85,7 @@ pub enum Odr {
     Hz50 = 0x09,
 }
 
-/// Raw 6-axis reading
+/// Raw 6-axis reading (chip frame, unscaled)
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RawReading {
     pub accel_x: i16,
@@ -102,7 +97,8 @@ pub struct RawReading {
     pub temp_raw: i16,
 }
 
-/// Scaled reading in physical units
+/// Scaled reading in the conventional right-handed body frame.
+/// Accel in g, gyro in dps.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ScaledReading {
     pub accel_x: f32,
@@ -137,7 +133,6 @@ where
     SPI: Transfer<u8, Error = SpiE> + Write<u8, Error = SpiE>,
     CS: OutputPin<Error = PinE>,
 {
-    /// Create a new driver instance
     pub fn new(spi: SPI, cs: CS) -> Self {
         Self {
             spi,
@@ -148,37 +143,23 @@ where
         }
     }
 
-    /// Initialize the ICM-42688-P
     pub fn init(&mut self) -> Result<(), Error<SpiE, PinE>> {
         self.cs.set_high().map_err(Error::Pin)?;
         cortex_m::asm::delay(10_000);
 
-        // Soft reset
         self.write_reg(REG_DEVICE_CONFIG, 0x01)?;
         cortex_m::asm::delay(1_000_000);
 
-        // Verify WHO_AM_I
         let who = self.read_reg(WHO_AM_I)?;
         if who != WHO_AM_I_VALUE {
             return Err(Error::WhoAmI(who));
         }
 
-        // Select bank 0
         self.write_reg(REG_BANK_SEL, 0x00)?;
-
-        // Configure gyro: 2000 dps, 1kHz ODR
         self.set_gyro_config(GyroRange::Dps2000, Odr::Hz1000)?;
-
-        // Configure accel: 16g, 1kHz ODR
         self.set_accel_config(AccelRange::G16, Odr::Hz1000)?;
-
-        // Filter bandwidth ODR/10 (~100 Hz at 1 kHz ODR)
         self.write_reg(REG_GYRO_ACCEL_CONFIG0, GYRO_ACCEL_FILTER_BW)?;
-
-        // Power on gyro + accel in low-noise mode
         self.write_reg(REG_PWR_MGMT0, 0x0F)?;
-
-        // Wait for stabilization
         cortex_m::asm::delay(1_000_000);
 
         Ok(())
@@ -198,7 +179,7 @@ where
         self.write_reg(REG_ACCEL_CONFIG0, range as u8 | odr as u8)
     }
 
-    /// Read raw accelerometer, gyroscope, and temperature data
+    /// Read raw accel, gyro, temp (chip frame, big-endian from 0x1D).
     pub fn read_raw(&mut self) -> Result<RawReading, Error<SpiE, PinE>> {
         let mut buf = [0u8; 15];
         buf[0] = REG_TEMP_DATA1 | SPI_READ;
@@ -218,43 +199,30 @@ where
         })
     }
 
-    /// Body-frame axis signs. The ICM-42688-P is mounted at some orientation
-    /// relative to the airframe; these map the chip's raw axes to the flight
-    /// convention used everywhere downstream:
-    ///   +roll  = right-side-down (right wing drops)
-    ///   +pitch = nose-up
-    ///   +yaw   = nose-right (clockwise viewed from above)
-    /// Accel and gyro share the same axis triad on this part, so one sign set
-    /// covers both. VERIFY ON BENCH: tilt right -> telemetry roll must go +.
-    /// Flip the offending entry here (and ONLY here) if an axis reads inverted.
-    const AXIS_SIGN_X: f32 = -1.0; // roll axis
-    const AXIS_SIGN_Y: f32 = 1.0; // pitch axis
-    const AXIS_SIGN_Z: f32 = 1.0; // yaw axis
-
-    /// Read scaled data in physical units
+    /// Read scaled data, mapped to the conventional right-handed body frame.
+    /// Axis signs come from ACCEL_SIGN / GYRO_SIGN. Gyro bias is subtracted
+    /// AFTER sign correction, so bias is stored in body frame (see calibrate).
     pub fn read_scaled(&mut self) -> Result<ScaledReading, Error<SpiE, PinE>> {
         let raw = self.read_raw()?;
-        let accel_sens = self.accel_range.sensitivity();
-        let gyro_sens = self.gyro_range.sensitivity();
+        let a_sens = self.accel_range.sensitivity();
+        let g_sens = self.gyro_range.sensitivity();
 
         Ok(ScaledReading {
-            accel_x: Self::AXIS_SIGN_X * (raw.accel_x as f32 / accel_sens),
-            accel_y: Self::AXIS_SIGN_Y * (raw.accel_y as f32 / accel_sens),
-            accel_z: Self::AXIS_SIGN_Z * (raw.accel_z as f32 / accel_sens),
-            gyro_x: Self::AXIS_SIGN_X * (raw.gyro_x as f32 / gyro_sens) - self.gyro_bias[0],
-            gyro_y: Self::AXIS_SIGN_Y * (raw.gyro_y as f32 / gyro_sens) - self.gyro_bias[1],
-            gyro_z: Self::AXIS_SIGN_Z * (raw.gyro_z as f32 / gyro_sens) - self.gyro_bias[2],
+            accel_x: ACCEL_SIGN[0] * (raw.accel_x as f32 / a_sens),
+            accel_y: ACCEL_SIGN[1] * (raw.accel_y as f32 / a_sens),
+            accel_z: ACCEL_SIGN[2] * (raw.accel_z as f32 / a_sens),
+            gyro_x: GYRO_SIGN[0] * (raw.gyro_x as f32 / g_sens) - self.gyro_bias[0],
+            gyro_y: GYRO_SIGN[1] * (raw.gyro_y as f32 / g_sens) - self.gyro_bias[1],
+            gyro_z: GYRO_SIGN[2] * (raw.gyro_z as f32 / g_sens) - self.gyro_bias[2],
             temp_c: (raw.temp_raw as f32 / 132.48) + 25.0,
         })
     }
 
-    /// Check if data is ready
     pub fn data_ready(&mut self) -> Result<bool, Error<SpiE, PinE>> {
         let status = self.read_reg(REG_INT_STATUS)?;
         Ok(status & 0x08 != 0)
     }
 
-    /// Read WHO_AM_I register
     pub fn who_am_i(&mut self) -> Result<u8, Error<SpiE, PinE>> {
         self.read_reg(WHO_AM_I)
     }
@@ -274,16 +242,16 @@ where
         Ok(())
     }
 
-    /// Average `samples` stationary gyro readings and store the result as a
-    /// zero-rate bias. MUST be called with the craft completely still.
-    /// Returns the measured bias, or NotStationary if the craft moved.
+    /// Average `samples` stationary readings into a body-frame gyro bias.
+    /// MUST be called with the craft completely still. Because it runs through
+    /// read_scaled() (with gyro_bias zeroed), the captured bias is already in
+    /// body frame and sign-corrected — do NOT swap or re-sign it downstream.
     pub fn calibrate_gyro(&mut self, samples: u16) -> Result<[f32; 3], Error<SpiE, PinE>> {
-        const MAX_STD_DPS: f32 = 2.0; // per-axis std-dev gate; loosen if your bench trips it
+        const MAX_STD_DPS: f32 = 2.0;
 
-        self.gyro_bias = [0.0; 3]; // measure raw rate
+        self.gyro_bias = [0.0; 3]; // measure sign-corrected raw rate
 
-        // Discard ~250 ms of post-init settling before measuring — the sensor
-        // is noisier right after reset/power-on and can throw transients.
+        // Discard ~250 ms of post-init settling.
         for _ in 0..250 {
             let mut tries = 0u32;
             while !self.data_ready()? {
@@ -295,7 +263,6 @@ where
             let _ = self.read_scaled()?;
         }
 
-        // Accumulate sum and sum-of-squares for mean + std-dev.
         let mut sum = [0.0f32; 3];
         let mut sum_sq = [0.0f32; 3];
         for _ in 0..samples {
@@ -317,9 +284,8 @@ where
         let n = samples as f32;
         let mean = [sum[0] / n, sum[1] / n, sum[2] / n];
 
-        // Gate on std-dev (robust to single transients, unlike peak-to-peak).
         for i in 0..3 {
-            let var = (sum_sq[i] / n) - mean[i] * mean[i]; // E[x²] − E[x]²
+            let var = (sum_sq[i] / n) - mean[i] * mean[i];
             let std = if var > 0.0 { var.sqrt() } else { 0.0 };
             if std > MAX_STD_DPS {
                 return Err(Error::MotionDetected(std));
@@ -329,6 +295,7 @@ where
         self.gyro_bias = mean;
         Ok(mean)
     }
+
     pub fn release(self) -> (SPI, CS) {
         (self.spi, self.cs)
     }

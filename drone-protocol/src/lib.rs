@@ -66,10 +66,10 @@ impl Message {
 
     pub const fn payload_len(&self) -> usize {
         match self {
-            Message::RcCommand { .. } => core::mem::size_of::<RcCommand>(),
-            Message::ArmCommand { .. } => core::mem::size_of::<bool>(),
-            Message::Telemetry { .. } => core::mem::size_of::<Telemetry>(),
-            Message::Heartbeat { .. } => core::mem::size_of::<u32>(),
+            Message::RcCommand { .. } => 12,
+            Message::ArmCommand { .. } => 1,
+            Message::Telemetry { .. } => 29,
+            Message::Heartbeat { .. } => 4,
         }
     }
 
@@ -127,7 +127,7 @@ impl Message {
                 pitch: f32::from_le_bytes(payload[8..12].try_into().ok()?),
             }),
             (MSG_ARM_COMMAND, 1) => Message::ArmCommand(payload[0] != 0),
-            (MSG_TELEMETRY, 28) => Message::Telemetry(Telemetry {
+            (MSG_TELEMETRY, 29) => Message::Telemetry(Telemetry {
                 roll: f32::from_le_bytes(payload[0..4].try_into().ok()?),
                 pitch: f32::from_le_bytes(payload[4..8].try_into().ok()?),
                 yaw: f32::from_le_bytes(payload[8..12].try_into().ok()?),

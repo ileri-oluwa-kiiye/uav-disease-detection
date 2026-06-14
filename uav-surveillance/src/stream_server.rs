@@ -1,12 +1,21 @@
 use esp_idf_svc::http::server::{Configuration, EspHttpServer};
-use esp_idf_svc::io::Write;
+use esp_idf_svc::io::{EspIOError, Write};
+use esp_idf_svc::sys::EspError;
 
 use crate::camera;
 
 const STREAM_CONTENT_TYPE: &str = "multipart/x-mixed-replace; boundary=frame";
 const HTML: &[u8] = include_bytes!("stream.html");
 
-pub fn start() -> anyhow::Result<EspHttpServer<'static>> {
+#[derive(Debug, thiserror::Error, Clone)]
+pub enum StreamError {
+    #[error(transparent)]
+    Esp(#[from] EspError),
+    #[error(transparent)]
+    EspIO(#[from] EspIOError),
+}
+
+pub fn start() -> Result<EspHttpServer<'static>, StreamError> {
     let config = Configuration {
         stack_size: 16 * 1024,
         ..Default::default()

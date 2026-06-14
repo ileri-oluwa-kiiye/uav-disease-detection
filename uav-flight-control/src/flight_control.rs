@@ -162,36 +162,36 @@ impl FlightControl {
 pub fn default_rate_config() -> PidConfig {
     PidConfig {
         gains: PidGains {
-            kp: 0.5,
-            ki: 0.1,
-            kd: 0.0,
+            kp: 0.08,
+            ki: 0.05,
+            kd: 0.001,
         },
-        integral_limit: 50.0,
-        output_limit: 0.3,
+        integral_limit: 0.3,
+        output_limit: 1.0,
     }
 }
 
 pub fn default_rate_yaw_config() -> PidConfig {
     PidConfig {
         gains: PidGains {
-            kp: 0.3,
-            ki: 0.05,
+            kp: 0.12,
+            ki: 0.03,
             kd: 0.0,
         },
-        integral_limit: 50.0,
-        output_limit: 0.2,
+        integral_limit: 0.3,
+        output_limit: 1.0,
     }
 }
 
 pub fn default_angle_config() -> PidConfig {
     PidConfig {
         gains: PidGains {
-            kp: 4.0,
+            kp: 3.0,
             ki: 0.0,
             kd: 0.0,
         },
-        integral_limit: 20.0,
-        output_limit: 300.0,
+        integral_limit: 0.0,
+        output_limit: 200.0,
     }
 }
 
@@ -202,7 +202,7 @@ pub fn default_angle_yaw_config() -> PidConfig {
             ki: 0.0,
             kd: 0.0,
         },
-        integral_limit: 20.0,
+        integral_limit: 0.0,
         output_limit: 200.0,
     }
 }

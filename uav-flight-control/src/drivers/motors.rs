@@ -98,10 +98,10 @@ impl Motors {
         }
 
         let base = math::clamp(base_throttle, 0.0, 1.0);
-        self.set_throttle::<MOTOR_FL>(base + roll + pitch + yaw);
-        self.set_throttle::<MOTOR_FR>(base - roll + pitch - yaw);
-        self.set_throttle::<MOTOR_RL>(base + roll - pitch - yaw);
-        self.set_throttle::<MOTOR_RR>(base - roll - pitch + yaw);
+        self.set_throttle::<MOTOR_FL>(base + roll - pitch + yaw);
+        self.set_throttle::<MOTOR_FR>(base - roll - pitch - yaw);
+        self.set_throttle::<MOTOR_RL>(base + roll + pitch - yaw);
+        self.set_throttle::<MOTOR_RR>(base - roll + pitch + yaw);
     }
 
     /// Get the duty cycle count for a motor (to write to CCR register)

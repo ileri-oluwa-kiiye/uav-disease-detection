@@ -25,7 +25,6 @@ use esp_idf_svc::hal::{
 pub struct Comms {
     tx: Arc<Mutex<UartTxDriver<'static>>>,
     telemetry: Arc<Mutex<Option<Telemetry>>>,
-    last_rx_ms: Arc<AtomicU32>,
 }
 
 impl Comms {
@@ -55,12 +54,6 @@ impl Comms {
     /// Most recent telemetry frame, if any has arrived.
     pub fn telemetry(&self) -> Option<Telemetry> {
         *self.telemetry.lock().unwrap()
-    }
-
-    /// Milliseconds since the last valid inbound frame. Use this for a
-    /// link-alive check on the ESP side.
-    pub fn since_last_rx_ms(&self) -> u32 {
-        now_ms().saturating_sub(self.last_rx_ms.load(Ordering::Relaxed))
     }
 }
 
@@ -102,7 +95,6 @@ pub fn start<UART: Uart + 'static>(
     Ok(Comms {
         tx: Arc::new(Mutex::new(uart_tx)),
         telemetry,
-        last_rx_ms,
     })
 }
 
