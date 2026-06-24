@@ -8,7 +8,6 @@ sdkconfig.old
 components_esp32s3.lock
 
 # Secrets
-.env*
 
 # Cargo
 Cargo.lock

@@ -5,6 +5,7 @@
 //! so any thread can send RcCommand/ArmCommand. Wire format comes from the
 //! shared `drone-protocol` crate, so this stays in lockstep with the STM side.
 
+use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -114,8 +115,10 @@ fn rx_loop(
             Ok(1) => {
                 if let Some(msg) = parser.feed(byte[0]) {
                     last_rx_ms.store(now_ms(), Ordering::Relaxed);
-                    if let Message::Telemetry(tele) = msg {
-                        *telemetry.lock().unwrap() = Some(tele);
+                    log::info!("received message: {:?}", msg);
+                    if let Message::Telemetry(t) = msg {
+                        log::info!("revceived telemtry");
+                        *telemetry.lock().unwrap() = Some(t)
                     }
                 }
             }

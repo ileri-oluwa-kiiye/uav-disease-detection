@@ -1,14 +1,15 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 
 use drone_protocol::Telemetry;
 
 use crate::comms::Comms;
 use crate::mqtt::client::MqttV3Client;
 
-const BROKER_ADDR: &str = "10.46.15.59:1883";
+const BROKER_ADDR: &str = std::env!("BROKER_ADDR");
 const TOPIC_CONTROL: &str = "drone/control";
 const TOPIC_TELEMETRY: &str = "drone/telemetry";
 const RC_HZ: u64 = 50;
